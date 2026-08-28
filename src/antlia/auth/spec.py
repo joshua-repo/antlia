@@ -41,6 +41,13 @@ class Field:
     # every spec to wrap them in a lambda.
     cast: Callable[[Any], Any] = str
     doc: str = ""
+    #: Other spellings this field answers to -- what the vendor's own UI calls
+    #: it. Someone copying "Secret key" off a settings page should not have to
+    #: know antlia named the field `api_secret`.
+    aliases: tuple[str, ...] = ()
+
+    def spellings(self) -> tuple[str, ...]:
+        return (self.name, *self.aliases)
 
     def parse(self, raw: object) -> Any:
         if self.cast is bool:

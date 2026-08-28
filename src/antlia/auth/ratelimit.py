@@ -115,6 +115,44 @@ def limiter_for(source: str, profile: str | None, rate: float | None, burst: int
         return created
 
 
+def endpoint_limiter(
+    source: str, profile: str | None, endpoint: str, rate: float | None, burst: int = 1
+) -> Limiter:
+    """A limiter for one endpoint of one identity.
+
+    Some vendors budget per endpoint rather than per account -- Trading212
+    allows one call every 30 seconds to `account/info` and six a minute to
+    `history/orders`. A single shared bucket cannot express that: set it to the
+    tightest limit and everything crawls, set it to the loosest and the tight
+    endpoint 429s.
+    """
+    return limiter_for(f"{source}#{endpoint}", profile, rate, burst)
+
+
+def observe_limit(
+    source: str, profile: str | None, endpoint: str, limit: float, period: float
+) -> Limiter:
+    """Install what the vendor *said* its limit is, replacing any guess.
+
+    `limiter_for`'s first-rate-wins rule is right for a configured rate, where
+    later callers must not quietly widen the budget. It is wrong for a rate the
+    vendor reported in a response header: that is not a caller's preference, it
+    is the truth arriving late, and it should overwrite the default the first
+    request had to guess at.
+    """
+    if period <= 0 or limit <= 0:
+        return Unlimited()
+    key = str(LimiterKey(f"{source}#{endpoint}", profile))
+    rate = limit / period
+    with _buckets_lock:
+        existing = _buckets.get(key)
+        if isinstance(existing, TokenBucket) and existing.rate == rate:
+            return existing
+        bucket = TokenBucket(rate, max(1, int(limit)))
+        _buckets[key] = bucket
+        return bucket
+
+
 def reset() -> None:
     """Drop every bucket. For tests."""
     with _buckets_lock:

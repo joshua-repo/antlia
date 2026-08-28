@@ -107,6 +107,39 @@ class TestTrading212:
         cred = cred_for(self.provider, "live", api_key="tttt")
         assert "tttt" not in repr(cred)
 
+    def test_a_key_and_secret_become_http_basic(self):
+        # T212 issues the pair together and expects Basic; a bare key on a
+        # paired credential 401s on every call.
+        import base64
+
+        cred = cred_for(self.provider, "live", api_key="k", api_secret="s")
+        header = self.provider.auth_header(cred)
+        assert header.startswith("Basic ")
+        assert base64.b64decode(header.split(" ", 1)[1]).decode() == "k:s"
+
+    def test_a_key_alone_is_sent_bare(self):
+        cred = cred_for(self.provider, "live", api_key="k")
+        assert self.provider.auth_header(cred) == "k"
+
+    def test_the_secret_never_appears_in_the_repr_or_the_report(self):
+        cred = cred_for(self.provider, "live", api_key="k", api_secret="sssecret")
+        assert "sssecret" not in repr(cred)
+        assert "sssecret" not in str(self.provider.describe(cred))
+
+    def test_the_report_says_which_scheme_is_in_use(self):
+        # Otherwise a 401 cannot be told apart from a forgotten secret.
+        paired = self.provider.describe(
+            cred_for(self.provider, "live", api_key="k", api_secret="s")
+        )
+        alone = self.provider.describe(cred_for(self.provider, "live", api_key="k"))
+        assert paired["auth_scheme"] == "basic"
+        assert alone["auth_scheme"] == "bare-key"
+
+    def test_two_secrets_are_two_sessions(self):
+        # api_secret is part of the identity; otherwise rotating it would keep
+        # handing back the connection built with the old one.
+        assert "api_secret" in self.provider.spec.identity
+
 
 class TestSpecs:
     @pytest.mark.parametrize("name", ["ibkr", "thetadata", "trading212", "yfinance"])
@@ -259,3 +292,68 @@ class TestThetaDataCredentialShapes:
         cred = cred_for(self.provider, api_key="k", dataframe_type="pandas", mdds_port="443")
         kwargs = self.provider._kwargs(ctor, cred)
         assert kwargs == {"api_key": "k"}  # unknown keywords dropped, not passed
+
+
+class TestTrading212Pacing:
+    """The limiter has to be *used*, and it has to be per endpoint."""
+
+    @staticmethod
+    def fake_httpx(monkeypatch):
+        import sys
+        import types
+
+        class Client:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        module = types.ModuleType("httpx")
+        module.Client = Client  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "httpx", module)
+        return Client
+
+    @staticmethod
+    def request(path):
+        return type("R", (), {"url": type("U", (), {"path": path})()})()
+
+    def build(self, monkeypatch):
+        Client = self.fake_httpx(monkeypatch)
+        provider = Trading212Provider()
+        client = provider.connect(cred_for(provider, "live", api_key="k"), auth.Unlimited())
+        assert isinstance(client, Client)  # still the vendor's object, not a wrapper
+        return client.kwargs["event_hooks"]
+
+    def test_each_endpoint_gets_its_own_bucket(self, monkeypatch):
+        hooks = self.build(monkeypatch)
+        for hook in hooks["request"]:
+            hook(self.request("/api/v0/equity/portfolio"))
+            hook(self.request("/api/v0/equity/account/cash"))
+        a = auth.endpoint_limiter("trading212", "live", "/api/v0/equity/portfolio", None)
+        b = auth.endpoint_limiter("trading212", "live", "/api/v0/equity/account/cash", None)
+        assert a is not b
+
+    def test_the_response_headers_replace_the_guess(self, monkeypatch):
+        # T212 reports the real budget per endpoint; the first call has to
+        # guess, every call after it should be paced by fact.
+        hooks = self.build(monkeypatch)
+        response = type(
+            "Resp",
+            (),
+            {
+                "headers": {"x-ratelimit-limit": "1", "x-ratelimit-period": "30"},
+                "request": self.request("/api/v0/equity/account/info"),
+            },
+        )()
+        for hook in hooks["response"]:
+            hook(response)
+        bucket = auth.endpoint_limiter("trading212", "live", "/api/v0/equity/account/info", None)
+        assert bucket.rate == pytest.approx(1 / 30)
+
+    def test_headers_that_are_absent_or_junk_change_nothing(self, monkeypatch):
+        hooks = self.build(monkeypatch)
+        response = type(
+            "Resp",
+            (),
+            {"headers": {}, "request": self.request("/api/v0/equity/portfolio")},
+        )()
+        for hook in hooks["response"]:
+            hook(response)  # must not raise

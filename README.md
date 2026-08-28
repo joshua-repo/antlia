@@ -14,7 +14,7 @@ Four parts, of which the first is built:
 | | | |
 |---|---|---|
 | `auth` | credentials, sessions, rate limits | **built** |
-| `account` | live account state, multi-source | **built** (IBKR) |
+| `account` | live account state, multi-source | **built** (IBKR, Trading212) |
 | `history` | cached historical data, multi-source | planned |
 | `live` | on-demand live historical pulls | planned |
 
@@ -44,7 +44,7 @@ object (`ib_insync.IB`, `httpx.Client`, …), not a wrapper.
 |---|---|---|---|
 | `ibkr` | socket to a running TWS / IB Gateway | `paper` (7497), `live` (7496) | `antlia[ibkr]` |
 | `thetadata` | API key, or email+password (cloud gRPC) | — | `antlia[thetadata]` |
-| `trading212` | REST API key | `live`, `demo` | `antlia[trading212]` |
+| `trading212` | key + secret, HTTP Basic | `live`, `demo` | `antlia[trading212]` |
 | `yfinance` | unauthenticated | — | `antlia[yfinance]` |
 
 Each vendor SDK is an optional extra, imported the first time its source is
@@ -231,6 +231,11 @@ Other decisions the canonical schema makes:
 - **`AccountSnapshot.vendor` keeps everything that did not map**, unaltered.
   Reaching into it from a consumer means the canonical schema is missing a
   field, which is a change to make here.
+- **Trading212 quotes some lines in a minor unit** (GBX beside GBP, in the same
+  account, with no currency in the payload). The scale is recovered from
+  `ppl = quantity * (current - average) * factor`, accepted only when it lands
+  on a power of ten, and left `None` otherwise — the same failing-closed rule as
+  IBKR's multiplier.
 
 ## Development
 

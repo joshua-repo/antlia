@@ -14,6 +14,7 @@ from antlia.auth.errors import UnknownSource
 
 _BUILTIN: dict[str, str] = {
     "ibkr": "antlia.account.sources.ibkr:IBKRAccounts",
+    "trading212": "antlia.account.sources.trading212:Trading212Accounts",
 }
 
 _paths: dict[str, str] = dict(_BUILTIN)

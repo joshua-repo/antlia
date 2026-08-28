@@ -51,7 +51,13 @@ from antlia.auth.pool import (
     open_sessions,
     session,
 )
-from antlia.auth.ratelimit import Limiter, TokenBucket, Unlimited
+from antlia.auth.ratelimit import (
+    Limiter,
+    TokenBucket,
+    Unlimited,
+    endpoint_limiter,
+    observe_limit,
+)
 from antlia.auth.registry import get as provider
 from antlia.auth.registry import register, sources, unregister
 from antlia.auth.spec import Field, SourceSpec
@@ -69,6 +75,8 @@ __all__ = [
     "Limiter",
     "TokenBucket",
     "Unlimited",
+    "endpoint_limiter",
+    "observe_limit",
     # registry / extension
     "provider",
     "register",

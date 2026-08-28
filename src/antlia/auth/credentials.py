@@ -23,7 +23,7 @@ import os
 import stat
 import tomllib
 import warnings
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -83,6 +83,22 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
         warnings.warn(complaint, stacklevel=2)
 
     return tomllib.loads(raw.decode("utf-8"))
+
+
+def lookup(section: Mapping[str, Any], spellings: Iterable[str]) -> Any:
+    """Find a field in a config section, case-insensitively, by any spelling.
+
+    TOML keys here are hand-typed by the user, copying names off a vendor's
+    settings page. Case is not carrying meaning, and `SECRET_KEY` failing to
+    match `api_secret` produces "no value for it" about a value that is plainly
+    there -- the exact confusion this module exists to prevent.
+    """
+    folded = {str(k).casefold(): v for k, v in section.items()}
+    for spelling in spellings:
+        found = folded.get(spelling.casefold())
+        if found is not None:
+            return found
+    return None
 
 
 def _section(config: Mapping[str, Any], source: str) -> dict[str, Any]:
@@ -165,7 +181,6 @@ def resolve(
         if known and profile not in known and spec.default_profile != profile:
             raise UnknownProfile(spec.name, profile, known)
 
-    source_env = _env_key(spec.name)
     file_source = _section(conf, spec.name)
     file_profile = _profile_section(conf, spec.name, profile)
     overrides = overrides or {}
@@ -185,18 +200,20 @@ def resolve(
             found, origin = overrides[f.name], "call argument"
         else:
             candidates: list[tuple[str, object | None]] = []
-            if profile is not None:
-                key = _env_key(spec.name, profile, f.name)
+            spellings = f.spellings()
+            for spelling in spellings:
+                if profile is not None:
+                    key = _env_key(spec.name, profile, spelling)
+                    tried.append(f"${key}")
+                    candidates.append((f"${key}", os.environ.get(key)))
+                key = _env_key(spec.name, spelling)
                 tried.append(f"${key}")
                 candidates.append((f"${key}", os.environ.get(key)))
-            key = f"{source_env}_{f.name.upper()}"
-            tried.append(f"${key}")
-            candidates.append((f"${key}", os.environ.get(key)))
             if profile is not None:
                 tried.append(f"[{spec.name}.{profile}] {f.name} in {config_path()}")
-                candidates.append((tried[-1], file_profile.get(f.name)))
+                candidates.append((tried[-1], lookup(file_profile, spellings)))
             tried.append(f"[{spec.name}] {f.name} in {config_path()}")
-            candidates.append((tried[-1], file_source.get(f.name)))
+            candidates.append((tried[-1], lookup(file_source, spellings)))
 
             for where, candidate in candidates:
                 if candidate is not None:

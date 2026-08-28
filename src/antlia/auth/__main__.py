@@ -52,11 +52,16 @@ port = 7496
 # creds_file = ""
 # rate_limit = 20          # calls/sec; set this to your plan, not to a guess
 
+# Trading212 issues a key AND a secret together (Settings -> API); they are
+# sent as HTTP Basic. A key on its own authenticates nothing on a paired
+# credential. live and demo are different hosts and different pairs.
 [trading212.live]
 # api_key = ""
+# api_secret = ""
 
 [trading212.demo]
 # api_key = ""
+# api_secret = ""
 
 [yfinance]
 # rate_limit = 2

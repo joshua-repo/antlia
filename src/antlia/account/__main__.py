@@ -96,11 +96,13 @@ def render(snap: AccountSnapshot) -> str:
             )
 
     if snap.fills:
+        spans_days = len({f.time.date() for f in snap.fills}) > 1
+        stamp = "%Y-%m-%d %H:%M" if spans_days else "%H:%M:%S"
         lines += ["", f"FILLS ({len(snap.fills)})"]
-        for f in snap.fills:
+        for f in sorted(snap.fills, key=lambda x: x.time, reverse=True):
             lines.append(
-                f"  {f.time:%H:%M:%S}  {f.side:<5}{f.quantity:>6,.0f}  "
-                f"{str(f.instrument):<30}{_px(f.price):>12}"
+                f"  {f.time:{stamp}}  {f.side:<5}{f.quantity:>8,.0f}  "
+                f"{str(f.instrument):<26}{_px(f.price):>12}"
                 f"  comm {_px(f.commission)}  rPnL {_px(f.realized_pnl)}"
             )
 
