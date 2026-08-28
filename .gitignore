@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+
+# Credentials live in ~/.antlia, never in the repo -- but a stray copy here
+# must not be one `git add .` away from being published.
+credentials.toml
+.env
+
+# Local data tiers
+data/
+
+# Editor configs are local-only: launch configurations are exactly where a key
+# gets pasted "just for a second". Credentials belong in ~/.antlia.
+.vscode/
