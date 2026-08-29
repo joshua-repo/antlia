@@ -143,13 +143,15 @@ class Trading212Provider(Provider):
 
     def verify(self, handle: Any) -> str:
         try:
-            response = handle.get("/api/v0/equity/account/info")
+            response = handle.get("/api/v0/equity/account/summary")
         except Exception as exc:
             raise ConnectionFailed("trading212", f"{type(exc).__name__}: {exc}") from exc
         if response.status_code == 401:
             raise ConnectionFailed("trading212", "401 -- the API key is not valid for this host")
         if response.status_code == 403:
-            raise ConnectionFailed("trading212", "403 -- the key lacks the scope for account/info")
+            raise ConnectionFailed(
+                "trading212", "403 -- the key lacks the scope for account/summary"
+            )
         if response.status_code == 429:
             raise ConnectionFailed(
                 "trading212", "429 -- rate limited; lower rate_limit in the config"
@@ -157,7 +159,10 @@ class Trading212Provider(Provider):
         if response.status_code >= 400:
             raise ConnectionFailed("trading212", f"HTTP {response.status_code}")
         payload = response.json()
-        return f"account {payload.get('id', '?')} ({payload.get('currencyCode', '?')})"
+        # summary spells it `currency`; the older info endpoint said
+        # `currencyCode`. Accept either so a swap back is not a silent "?".
+        currency = payload.get("currency") or payload.get("currencyCode") or "?"
+        return f"account {payload.get('id', '?')} ({currency})"
 
     def healthy(self, handle: Any) -> bool:
         return not getattr(handle, "is_closed", False)

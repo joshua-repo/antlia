@@ -14,6 +14,7 @@ has to notice. Setting it false is possible and is a deliberate act.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import itertools
 from typing import Any
@@ -107,11 +108,18 @@ class IBKRProvider(Provider):
             hint = ""
             if port in PROFILE_PORTS.values():
                 hint = f"; IB Gateway uses {GATEWAY_PORTS} rather than TWS's {PROFILE_PORTS}"
-            raise ConnectionFailed(
-                "ibkr",
-                f"{type(exc).__name__}: {exc} (is TWS/Gateway running on "
-                f"{host}:{port} with the API enabled?{hint})",
-            ) from exc
+            # A *timeout* rather than a refusal usually means something is
+            # listening but the gateway behind it is not up -- a containerised
+            # gateway's port forwarder accepts the TCP connection while IBC is
+            # still waiting on an unanswered two-factor prompt.
+            waiting = isinstance(exc, TimeoutError | asyncio.TimeoutError)
+            cause = (
+                "something accepted the connection but no gateway answered -- "
+                "is it still logging in, or waiting on an unanswered two-factor prompt?"
+                if waiting
+                else f"is TWS/Gateway running on {host}:{port} with the API enabled?"
+            )
+            raise ConnectionFailed("ibkr", f"{type(exc).__name__}: {exc} ({cause}{hint})") from exc
         return ib
 
     def verify(self, handle: Any) -> str:

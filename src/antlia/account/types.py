@@ -58,10 +58,6 @@ class Instrument:
     local_symbol: str | None = None
     ids: Mapping[str, str] = field(default_factory=dict)
 
-    @property
-    def is_derivative(self) -> bool:
-        return self.kind in (OPTION, FUTURE, FUTURE_OPTION)
-
     def __str__(self) -> str:
         if self.kind == OPTION and self.expiry and self.strike is not None:
             return f"{self.symbol} {self.expiry:%Y-%m-%d} {self.strike:g}{self.right or ''}"

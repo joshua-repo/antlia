@@ -328,6 +328,48 @@ class TestDegradation:
         with pytest.raises(ConnectionFailed, match=message):
             Trading212Accounts()._get(Client(status=status), "/api/v0/equity/portfolio")
 
+    def test_a_429_is_retried_once_at_the_stated_reset(self, monkeypatch):
+        # Patched by string so the clock stays real everywhere else; monkeypatch
+        # restores it either way.
+        slept: list[float] = []
+        monkeypatch.setattr("time.sleep", slept.append)
+        monkeypatch.setattr("time.time", lambda: 1000.0)
+
+        client = Client()
+        answers = [
+            Response({}, status=429, headers={"x-ratelimit-reset": "1003"}),
+            Response(PORTFOLIO),
+        ]
+        client.get = lambda path, params=None: answers.pop(0)  # type: ignore[method-assign]
+        assert Trading212Accounts()._get(client, "/api/v0/equity/portfolio") == PORTFOLIO
+        assert slept == [3.0]
+
+    def test_a_reset_further_out_than_any_window_is_not_waited_on(self, monkeypatch):
+        # An epoch far in the future means the header is not what we think it
+        # is; sleeping on it would hang the caller for an unbounded time.
+        monkeypatch.setattr("time.time", lambda: 1000.0)
+        client = Client()
+        client.get = lambda path, params=None: Response(  # type: ignore[method-assign]
+            {}, status=429, headers={"x-ratelimit-reset": "999999"}
+        )
+        with pytest.raises(ConnectionFailed, match="429"):
+            Trading212Accounts()._get(client, "/api/v0/equity/portfolio")
+
+    def test_a_second_429_is_not_retried_again(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        monkeypatch.setattr("time.time", lambda: 1000.0)
+        client = Client()
+        calls: list[str] = []
+
+        def get(path, params=None):
+            calls.append(path)
+            return Response({}, status=429, headers={"x-ratelimit-reset": "1002"})
+
+        client.get = get  # type: ignore[method-assign]
+        with pytest.raises(ConnectionFailed, match="429"):
+            Trading212Accounts()._get(client, "/api/v0/equity/portfolio")
+        assert len(calls) == 2
+
     def test_a_429_quotes_the_endpoints_own_budget(self):
         client = Client()
         client.get = lambda path, params=None: Response(  # type: ignore[method-assign]

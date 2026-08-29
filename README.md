@@ -237,6 +237,39 @@ Other decisions the canonical schema makes:
   on a power of ten, and left `None` otherwise — the same failing-closed rule as
   IBKR's multiplier.
 
+## Using antlia from another project
+
+```bash
+uv add "antlia[ibkr,trading212] @ /path/to/antlia"     # or a git URL
+```
+
+Then, from anywhere — credentials live in `~/.antlia/`, so nothing depends on
+the working directory:
+
+```python
+from antlia import account
+
+legs = [
+    p for p in account.snapshot("ibkr", profile="live").positions if p.instrument.kind == "option"
+]
+```
+
+Four things to know before wiring it in:
+
+- **Python >=3.12**, and ask for the extras you use. A plain `pip install
+  antlia` gives you credential resolution and no vendor SDKs at all.
+- **Take one `snapshot()` and read from it.** `positions()`, `balances()`,
+  `margin()`, `orders()` and `fills()` are each a *full* snapshot underneath —
+  four HTTP calls for Trading212 — so calling several in a row multiplies the
+  requests and will meet a rate limit that a single snapshot never does.
+- **Rate limiting is per process.** The token buckets live in memory, so two
+  processes hitting the same account share nothing and can collide. Trading212
+  requests retry once at the reset the vendor names; beyond that, one long-lived
+  process is the design point.
+- **A source that cannot be reached raises**, it does not return empty. IBKR
+  needs its gateway running; a missing SDK raises `MissingExtra` naming the
+  exact `pip install`.
+
 ## Development
 
 ```bash

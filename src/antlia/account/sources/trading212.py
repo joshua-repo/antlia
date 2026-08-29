@@ -32,6 +32,7 @@ the account id and currency *and* the totals, at one call per 5s instead of
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Any
 
@@ -56,6 +57,10 @@ HISTORY_ORDERS = "/api/v0/equity/history/orders"
 #: How many historical orders to read for fills. The endpoint allows six calls
 #: a minute, so one page is what a snapshot can afford.
 FILL_PAGE = 50
+
+#: The longest a 429 retry will wait. T212's widest published window is 60s;
+#: a reset beyond that is not a window this code understands.
+MAX_RETRY_WAIT = 61.0
 
 
 def parse_time(raw: object) -> datetime | None:
@@ -141,8 +146,22 @@ class Trading212Accounts(AccountSource):
         return auth.session("trading212", profile, **overrides)
 
     def _get(self, client: Any, path: str, params: dict[str, Any] | None = None) -> Any:
-        """One GET, with the refusals translated into what to do about them."""
+        """One GET, with the refusals translated into what to do about them.
+
+        A 429 is retried once, waiting until the `x-ratelimit-reset` the vendor
+        itself named. The pacing in `antlia.auth` is process-local while the
+        budget is server-side, so a freshly started process begins with a full
+        bucket and can fire straight into a window another process (or its own
+        previous run) already spent. Waiting out a stated reset is not papering
+        over a bug; it is the only information available about state this
+        process cannot see. Anything beyond one retry would be.
+        """
         response = client.get(path, params=params)
+        if response.status_code == 429:
+            delay = self._reset_delay(response)
+            if delay is not None:
+                time.sleep(delay)
+                response = client.get(path, params=params)
         status = response.status_code
         if status == 401:
             raise ConnectionFailed(
@@ -163,6 +182,19 @@ class Trading212Accounts(AccountSource):
         if status >= 400:
             raise ConnectionFailed("trading212", f"HTTP {status} on {path}: {response.text[:200]}")
         return response.json()
+
+    def _reset_delay(self, response: Any) -> float | None:
+        """Seconds until the vendor says this endpoint frees up, if it is soon.
+
+        `x-ratelimit-reset` is an epoch second. A reset further out than the
+        widest budget T212 publishes means the header is not what we think it
+        is, so decline rather than sleep for an unbounded time.
+        """
+        reset = to_float(response.headers.get("x-ratelimit-reset"))
+        if reset is None:
+            return None
+        delay = reset - time.time()
+        return delay if 0 < delay <= MAX_RETRY_WAIT else None
 
     def _try(self, client: Any, path: str, params: dict[str, Any] | None = None) -> tuple[Any, str]:
         """A GET whose 403 is a missing scope rather than a broken snapshot."""
