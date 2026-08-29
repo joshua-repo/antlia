@@ -61,6 +61,9 @@ class IBKRProvider(Provider):
         identity=("host", "port", "readonly"),
         rate=45.0,
         burst=45,
+        # ib_insync drives an event loop and assumes it owns it; two
+        # threads on one IB object deadlock rather than race.
+        thread_safe=False,
         doc="Interactive Brokers TWS / IB Gateway socket session.",
     )
 

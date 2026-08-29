@@ -10,6 +10,13 @@ connection out from under a live user, not to decide when to disconnect.
 
 Reuse is keyed by what the provider says makes a session distinct, so two
 profiles, or two accounts on one broker, never collapse into one connection.
+
+**A session whose SDK is not thread-safe is held exclusively for the duration of
+the `with` block.** Pooling and threads combine badly otherwise: several threads
+sharing one `ib_insync.IB` each drive its event loop and the result is a
+deadlock, not a race -- four concurrent snapshots hung indefinitely where the
+same four in sequence took seconds. Serialising turns that into a queue. The
+lock is re-entrant, so nesting `session()` on one thread still works.
 """
 
 from __future__ import annotations
@@ -34,7 +41,8 @@ class _Entry:
     provider: Any
     limiter: Limiter
     refcount: int = 0
-    lock: threading.Lock = field(default_factory=threading.Lock)
+    #: Held for the whole `with` block when the SDK is single-threaded.
+    lock: threading.RLock = field(default_factory=threading.RLock)
 
 
 _pool: dict[tuple[Any, ...], _Entry] = {}
@@ -106,6 +114,9 @@ def session(source: str, profile: str | None = None, **overrides: Any) -> Iterat
     Keyword arguments override resolved fields for this call (`port=7497`).
     """
     key, entry = _open(source, profile, overrides)
+    exclusive = not registry.get(source).spec.thread_safe
+    if exclusive:
+        entry.lock.acquire()
     with _pool_lock:
         entry.refcount += 1
     try:
@@ -113,6 +124,8 @@ def session(source: str, profile: str | None = None, **overrides: Any) -> Iterat
     finally:
         with _pool_lock:
             entry.refcount = max(0, entry.refcount - 1)
+        if exclusive:
+            entry.lock.release()
 
 
 def limiter(source: str, profile: str | None = None) -> Limiter:

@@ -76,6 +76,10 @@ class SourceSpec:
     default_profile: str | None = None
     rate: float | None = None
     burst: int = 1
+    #: Whether the vendor's client may be used from several threads at once.
+    #: False serialises access to a pooled session, because the alternative for
+    #: a single-threaded SDK is not a race but a deadlock.
+    thread_safe: bool = True
     doc: str = ""
     #: Fields whose value identifies the session; two requests agreeing on
     #: these share one connection. Empty means "all resolved fields".

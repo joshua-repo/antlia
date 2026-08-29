@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 from antlia import auth
@@ -157,3 +159,74 @@ def test_missing_sdk_names_the_extra():
     auth.register("needy", Needy())
     with pytest.raises(MissingExtra, match=r"antlia\[needy\]"), auth.session("needy"):
         pass
+
+
+class TestThreadSafety:
+    """Pooling plus threads: a shared single-threaded client must be queued."""
+
+    def source(self, thread_safe):
+        class Provider(auth.Provider):
+            spec = auth.SourceSpec(
+                name="single",
+                fields=(auth.Field("api_key", secret=True),),
+                identity=("api_key",),
+                thread_safe=thread_safe,
+            )
+
+            def connect(self, cred, limiter):
+                return object()
+
+        auth.register("single", Provider())
+
+    def overlap(self, name):
+        """How many threads were inside the with-block simultaneously."""
+        import threading
+
+        inside = 0
+        peak = 0
+        guard = threading.Lock()
+        barrier = threading.Barrier(4, timeout=5)
+
+        def worker():
+            nonlocal inside, peak
+            with auth.session(name):
+                with guard:
+                    inside += 1
+                    peak = max(peak, inside)
+                # Serialised sources never all arrive; the timeout is the
+                # expected outcome there, not a failure.
+                with contextlib.suppress(threading.BrokenBarrierError):
+                    barrier.wait()
+                with guard:
+                    inside -= 1
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        return peak
+
+    def test_a_thread_safe_source_is_shared_freely(self, config):
+        config('[single]\napi_key = "k"\n')
+        self.source(thread_safe=True)
+        assert self.overlap("single") > 1
+
+    def test_a_single_threaded_source_is_held_exclusively(self, config):
+        # Four concurrent IBKR snapshots deadlocked before this; serialising
+        # turns that into a queue.
+        config('[single]\napi_key = "k"\n')
+        self.source(thread_safe=False)
+        assert self.overlap("single") == 1
+
+    def test_nesting_on_one_thread_still_works(self, config):
+        # The lock is re-entrant: a plain Lock would deadlock a caller that
+        # opens a session inside another one.
+        config('[single]\napi_key = "k"\n')
+        self.source(thread_safe=False)
+        with auth.session("single") as outer, auth.session("single") as inner:
+            assert outer is inner
+
+    def test_ibkr_declares_itself_single_threaded(self):
+        assert auth.provider("ibkr").spec.thread_safe is False
+        assert auth.provider("trading212").spec.thread_safe is True
