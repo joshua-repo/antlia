@@ -3,13 +3,17 @@ from __future__ import annotations
 import pytest
 
 from antlia.auth import pool, ratelimit, registry
+from antlia.fx import registry as fx_registry
 
 
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
-    """Every test gets an empty config dir, registry, pool and limiter table.
+    """Every test gets an empty config dir, registries, pool and limiter table.
 
-    All three are process-global by design (a rate limit belongs to the account,
+    `ANTLIA_HOME` also relocates the fx rate cache, so a test never reads the
+    developer's own `~/.antlia/fx.json` or writes over it.
+
+    All four are process-global by design (a rate limit belongs to the account,
     not the caller), so leaking them between tests would make failures depend on
     ordering.
     """
@@ -19,10 +23,12 @@ def isolated_state(tmp_path, monkeypatch):
             monkeypatch.delenv(key, raising=False)
     pool.close_all()
     registry.reset()
+    fx_registry.reset()
     ratelimit.reset()
     yield
     pool.close_all()
     registry.reset()
+    fx_registry.reset()
     ratelimit.reset()
 
 

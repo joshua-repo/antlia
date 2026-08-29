@@ -65,3 +65,27 @@ def test_importing_account_pulls_in_no_broker_sdk():
         "print(sorted(added & {'ib_insync', 'thetadata', 'yfinance', 'httpx'}))"
     ).stdout
     assert out.strip() == "[]"
+
+
+def test_fx_imports_auth_and_nothing_else_from_antlia():
+    # The dependency order is auth <- fx. fx must not reach for account (a
+    # broker's rate is deliberately not an FX source) nor for history.
+    out = run(
+        "import antlia.fx, sys;"
+        "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
+        " and not m.startswith(('antlia.auth', 'antlia.fx'))}))"
+    ).stdout
+    assert out.strip() == "[]"
+
+
+def test_importing_fx_pulls_in_no_vendor_sdk():
+    # The whole chain is lazy: the frankfurter fallback runs on the stdlib
+    # alone, so `antlia[yfinance]` is a preference, not an install cost.
+    out = run(
+        "import sys;"
+        "before = set(sys.modules);"
+        "import antlia.fx;"
+        "added = {m.split('.')[0] for m in set(sys.modules) - before};"
+        "print(sorted(added & {'ib_insync', 'thetadata', 'yfinance', 'httpx', 'pandas'}))"
+    ).stdout
+    assert out.strip() == "[]"
