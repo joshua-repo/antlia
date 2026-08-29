@@ -9,12 +9,13 @@ It is a library. Other projects import it; it is the one place they get data
 from, so a backtest, a screen and a dashboard cannot quietly disagree about what
 happened.
 
-Four parts, of which the first is built:
+Five parts, of which three are built:
 
 | | | |
 |---|---|---|
 | `auth` | credentials, sessions, rate limits | **built** |
 | `account` | live account state, multi-source | **built** (IBKR, Trading212) |
+| `fx` | foreign exchange rates, multi-source | **built** (Yahoo, ECB) |
 | `history` | cached historical data, multi-source | planned |
 | `live` | on-demand live historical pulls | planned |
 
@@ -237,6 +238,95 @@ Other decisions the canonical schema makes:
   on a power of ten, and left `None` otherwise — the same failing-closed rule as
   IBKR's multiplier.
 
+## `antlia.fx`
+
+Foreign exchange rates, so figures in different currencies can be added up.
+
+```python
+from antlia import fx
+
+table = fx.rates(("USD", "GBP", "JPY", "HKD"))
+table.convert(83289.64, "GBP", "USD")  # -> 112753.17
+table.source, table.as_of, table.stale  # 'yfinance', ..., False
+```
+
+`RateTable.rates` is **units of each currency per 1 USD** — `GBP: 0.7387,
+JPY: 160.04` reads as "one dollar buys 0.7387 pounds or 160.04 yen". USD is the
+pivot and every conversion crosses through it, so adding a currency is a
+one-line change.
+
+```bash
+python -m antlia.fx                             # the table, cache or live
+python -m antlia.fx --verify                    # every source, live, in turn
+python -m antlia.fx --convert 83289.64 GBP USD
+```
+
+### Two sources, tried in order
+
+**`yfinance` first.** `{CCY}=X` is a market rate, and it reconciles with the
+broker: Yahoo said USD/JPY 160.04 where IBKR's own reported rate was 160.08, and
+a JPY 772,600 position converts to USD 4,827.60 against IBKR's own USD 4,826.
+That agreement is the point — a converted total that cannot be reconciled with
+the broker's own screen is worthless.
+
+**`frankfurter` underneath it** (ECB reference rates, no key, no quota). Official
+and stable, but a once-daily 16:00 CET fixing: on 2026-08-28 it had GBP/USD at
+0.73624 against the market's 0.73869, which is 0.33% — small enough to look right
+and large enough to break a reconciliation. It is second for that reason, and
+present because a chain whose only link is an unofficial scraper is not a chain.
+
+Sources are tried in order and **the first complete answer wins**. Results are
+never stitched together across providers: a total assembled from two vendors'
+rates cannot be reconciled against either of them. `fx.chain()` shows the order;
+`fx.register(name, source, first=True)` puts your own at the head of it.
+
+### What it will and will not do
+
+- **It never invents a rate.** An unknown currency converts to `None`, never to
+  an approximation. A wrong rate mis-states a whole portfolio quietly; an absent
+  one just removes a feature.
+- **It caches with a TTL and keeps the stale copy.** Rates are cacheable in a way
+  account state deliberately is not. The table lives in `~/.antlia/fx.json` for
+  six hours; when every source fails, the last one comes back with `stale=True`
+  rather than nothing. The consumer decides whether stale is good enough — but
+  it is told. The TTL is measured from the fetch, not from `as_of`: Yahoo stamps
+  an FX rate with the last daily close, so a TTL keyed to that would expire
+  instantly and never once hit.
+- **It raises rather than returning `None`.** `RatesUnavailable` — a subclass of
+  `auth`'s `ConnectionFailed` — when there is nothing at all, not even a stale
+  table. Degrading to "no rates" is the consumer's policy, not this layer's.
+- **A broker's rate is not an FX source.** See below.
+
+### A broker's rate stays an account concern
+
+IBKR reports its own rate per currency on `Balance.exchange_rate`, live, and by
+definition the one its account totals were computed with. That number is **not**
+reachable through `fx`, on purpose:
+
+1. It is not a market rate. It is what *one* broker used to value *one* account
+   at *one* instant, and it means something only against that account's totals.
+2. It cannot answer this layer's question. `rates()` takes currencies; a broker
+   rate needs a credential, a connection and an account id. Admitting one would
+   force an `account=` argument or a silent "first account" — and then the same
+   call returns different numbers depending on configuration, which is exactly
+   the failure "single source of truth" is meant to prevent.
+3. The two genuinely differ (160.04 against 160.08). One call with two answers
+   is worse than one answer and a documented way to compare the other.
+
+So: **restating a broker's own account totals uses that broker's own rate;
+combining across brokers, or converting anything that is not an account, uses
+`fx`.** To compare them, `RateTable.inverse()` is deliberately in the broker's
+orientation — units of base per 1 unit of the currency, which is what
+`Balance.exchange_rate` carries:
+
+```python
+table.inverse("JPY")  # 0.006248 -- the market
+snap.balance("JPY").exchange_rate  # 0.006247 -- what IBKR valued the account with
+```
+
+Comparing across orientations instead is wrong by a factor of 25,000 and looks
+plausible in neither direction, which is why the accessor exists at all.
+
 ## Using antlia from another project
 
 ```bash
@@ -269,6 +359,10 @@ Four things to know before wiring it in:
 - **A source that cannot be reached raises**, it does not return empty. IBKR
   needs its gateway running; a missing SDK raises `MissingExtra` naming the
   exact `pip install`.
+- **`fx` needs no extra at all.** Its Frankfurter fallback runs on the standard
+  library, so a plain `pip install antlia` can still convert currencies;
+  `antlia[yfinance]` upgrades the primary source from a daily fixing to a market
+  rate.
 
 ## Development
 
