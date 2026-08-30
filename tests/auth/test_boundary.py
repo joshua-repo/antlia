@@ -89,3 +89,48 @@ def test_importing_fx_pulls_in_no_vendor_sdk():
         "print(sorted(added & {'ib_insync', 'thetadata', 'yfinance', 'httpx', 'pandas'}))"
     ).stdout
     assert out.strip() == "[]"
+
+
+def test_history_imports_auth_and_nothing_else_from_antlia():
+    # The dependency order is auth <- history. history must not reach for
+    # account or fx: it is a read surface of its own, not a composition.
+    out = run(
+        "import antlia.history, sys;"
+        "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
+        " and not m.startswith(('antlia.auth', 'antlia.history'))}))"
+    ).stdout
+    assert out.strip() == "[]"
+
+
+def test_importing_history_pulls_in_no_vendor_sdk_and_no_dataframe_library():
+    # duckdb and pyarrow are this layer's own machinery and load with it. A
+    # consumer's dataframe preference is not: `frame="pandas"` imports pandas
+    # when it is asked for, and never before.
+    out = run(
+        "import sys;"
+        "before = set(sys.modules);"
+        "import antlia.history;"
+        "added = {m.split('.')[0] for m in set(sys.modules) - before};"
+        "print(sorted(added & {'ib_insync', 'thetadata', 'yfinance', 'httpx', "
+        "'pandas', 'polars'}))"
+    ).stdout
+    assert out.strip() == "[]"
+
+
+def test_a_history_read_of_a_covered_window_never_authenticates():
+    # The cache-first guarantee, enforced rather than documented: a covered
+    # read must not so much as resolve a credential, or a backtest on a
+    # metered plan silently costs a request per run.
+    out = run(
+        "import datetime as dt, tempfile, antlia.auth.pool as pool;"
+        "from antlia import history;"
+        "from tests.history.fakes import FakeHistory;"
+        "src = FakeHistory();"
+        "history.register('fake', src, first=True);"
+        "root = tempfile.mkdtemp();"
+        "history.equity_eod('AAPL', '2026-01-05', '2026-01-09', store=root);"
+        "src.calls.clear();"
+        "history.equity_eod('AAPL', '2026-01-05', '2026-01-09', store=root);"
+        "print(src.calls, pool.open_sessions())"
+    ).stdout
+    assert out.strip() == "[] []"

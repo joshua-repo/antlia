@@ -9,14 +9,14 @@ It is a library. Other projects import it; it is the one place they get data
 from, so a backtest, a screen and a dashboard cannot quietly disagree about what
 happened.
 
-Five parts, of which three are built:
+Five parts, of which four are built:
 
 | | | |
 |---|---|---|
 | `auth` | credentials, sessions, rate limits | **built** |
 | `account` | live account state, multi-source | **built** (IBKR, Trading212) |
 | `fx` | foreign exchange rates, multi-source | **built** (Yahoo, ECB) |
-| `history` | cached historical data, multi-source | planned |
+| `history` | cached historical data, multi-source | **built** (ThetaData) |
 | `live` | on-demand live historical pulls | planned |
 
 ## `antlia.auth`
@@ -327,10 +327,316 @@ snap.balance("JPY").exchange_rate  # 0.006247 -- what IBKR valued the account wi
 Comparing across orientations instead is wrong by a factor of 25,000 and looks
 plausible in neither direction, which is why the accessor exists at all.
 
+## `antlia.history`
+
+Historical market data, cached locally, in one shape whichever vendor answered.
+This is what a backtest reads.
+
+```python
+from antlia import history
+
+history.equity_eod("AAPL", "2026-08-17", "2026-08-28")
+history.option_eod("AAPL", "2026-08-10", "2026-08-28", dte=(30, 45))
+history.coverage("option_eod", "AAPL", "2026-08-10", "2026-08-28")
+
+# A read takes a universe; one frame, and the `symbol` column tells them apart.
+history.equity_eod(["AAPL", "MSFT"], "2026-08-17", "2026-08-28")
+```
+
+Reads return a **`pyarrow.Table`**; `frame="pandas"` or `frame="polars"`
+converts, and imports that library only when you ask for it.
+
+```bash
+antlia-history                                    # what is held
+antlia-history verify                             # one live round-trip
+antlia-history plan option_eod AAPL --start 2026-06-01 --end 2026-08-28 --max-dte 45
+antlia-history fill option_eod AAPL --start 2026-06-01 --end 2026-08-28 --max-dte 45
+antlia-history check --repair                     # is the store intact?
+```
+
+`plan` prints how many vendor requests a `fill` would make and costs none of
+them. On a metered plan, run it first.
+
+`antlia-history` is a console script installed with the package -- warming a
+cache is a batch job you run from a shell or a cron entry, not from inside a
+backtest. From a source checkout with no install, `python -m antlia.history.cli`
+runs the same command.
+
+### Cache-first, and it is enforced
+
+A window the store already holds costs **zero vendor requests and never
+authenticates**. That is the property that makes a backtest repeatable and, on a
+metered plan, affordable: 14,260 option rows come back in 0.4s with no session
+opened. There is a test that fails if a covered read so much as resolves a
+credential.
+
+What is missing gets fetched, appended and recorded, so the second run of the
+same backtest is free. `fetch=` decides what happens when the store falls short,
+because both answers are right at different times:
+
+```python
+history.option_eod("AAPL", start, end)  # fill the gaps (default)
+history.option_eod("AAPL", start, end, fetch=False)  # NotCovered, naming the gaps
+```
+
+`ANTLIA_HISTORY_FETCH=0` flips the default process-wide, which is how a run is
+made provably offline without editing its call sites.
+
+### One write path, and a ledger of what was asked
+
+Everything that lands in the store goes through `history.fill()`. It plans
+before it spends anything:
+
+1. **Clamp to the entitlement horizon.** ThetaData fails a request whose range
+   *straddles* its plan boundary rather than trimming it, so reaching too far
+   back costs the whole fetch.
+2. **Subtract what is already settled** — rows fetched *and* days proven empty.
+3. **Subtract what the source has already refused.** A permanent refusal is
+   recorded once and never paid for again.
+4. **Clamp each expiration to its own life.** March's expiration is never asked
+   about April. On a multi-year warm-up this is the largest saving there is.
+5. **Split by the vendor's span cap**, exactly.
+
+The ledger is why step 2 can say "proven empty": a date with no rows is
+otherwise ambiguous between a market holiday and a fetch that never happened,
+and without somewhere to write that down a cache-first reader re-fetches every
+holiday forever.
+
+### The store
+
+    ~/.antlia/store/raw/<source>/<table>/session_date=YYYY-MM-DD/*.parquet
+    ~/.antlia/store/ledger/*.parquet
+
+`$ANTLIA_STORE` moves it; `store=` moves it for one call. DuckDB reads the
+Parquet directly — no server, no load step.
+
+**`raw/` is immutable and append-only and holds the vendor's own columns.**
+Nothing is renamed, converted, dropped or repaired on the way in — including the
+vendor's own float noise, which is stored as received rather than rounded into
+something tidier. Two provenance columns are added, `source` and `ingested_at`,
+and a vendor restatement is a **new append**, never an edit:
+
+```python
+history.equity_eod("AAPL", start, end)  # newest per session
+history.equity_eod("AAPL", start, end, latest=False)  # every version, ever
+```
+
+Normalisation happens **at read time**, in SQL, from the source's own
+projection. That is what lets the read API be one schema while `raw/` stays
+vendor-native, and it is why a vendor's mistake can be re-mapped later instead of
+having been baked into the files.
+
+### Restatements, and reproducing a past run
+
+A vendor changes its mind. `refresh=` is the only thing that records that — every
+other path subtracts what the ledger already settles, so without it a key can
+never have a second version:
+
+```python
+history.fill("option_eod", "AAPL", start, end, refresh=True)  # append a new version
+history.option_eod("AAPL", start, end)  # the newest, per contract
+history.option_eod("AAPL", start, end, latest=False)  # every version, ever
+history.option_eod("AAPL", start, end, as_of=when)  # what it said at `when`
+
+history.ingests("option_eod", "AAPL")  # the moments `as_of` accepts
+```
+
+Every row carries `ingested_at` -- **when that row was downloaded**, as distinct
+from the session date it describes, which is what `raw/` partitions on. `as_of`
+cuts on the download stamp and defaults to the newest.
+
+`ingests()` exists because `as_of` wants a timestamp and nothing otherwise tells
+you which ones there are. It is **one entry per write, not per fill**: a
+forty-expiration warm-up leaves forty, so `as_of` half way through a run shows
+exactly the rows that existed half way through it. Stamping a whole run with its
+start time would read tidier and would show you rows from the future.
+
+Nothing is ever edited. `as_of` is what makes a study reproducible after the
+vendor restates: verified live — a chain re-fetched with `refresh=True` doubled
+the stored appends, `latest=True` returned the new numbers, and `as_of` the
+first ingest returned the old ones, row for row.
+
+### Faster warm-ups
+
+`workers=` (`--workers`) runs several requests at once. They are independent by
+construction and the rate limiter is process-wide, so it goes faster without
+going over budget:
+
+```
+6 requests, 1 worker  -- 13.3s
+6 requests, 2 workers --  6.0s
+```
+
+**The vendor's ceiling is declared, not guessed.** ThetaData's FREE plan serves
+two concurrent requests and refuses the third outright, so the adapter declares
+`max_workers = 2` and asking for eight quietly gets two — the same way a
+400-day window quietly becomes 365-day chunks. A source `auth` marks
+single-threaded is clamped to one regardless. The default is 1, because raising
+it spends a metered budget faster and that is your call.
+
+### Integrity, and the line it does not cross
+
+```bash
+antlia-history check [--repair]
+```
+
+`check` asks whether the **store is telling the truth about itself** — never
+whether the numbers in it are any good. Three faults, and they are different:
+
+- **An unreadable file.** The worst, because the reader unions the whole glob to
+  align schemas: one truncated file makes *every* date in that table unreadable,
+  not just its own. `--repair` quarantines it (never deletes it — it is the only
+  copy of what the vendor said) so reads work again, then you re-fetch with
+  `--refresh`.
+- **A leaked staging directory**, left by a write that was killed.
+- **An expiration listing older than the option data beside it** -- the
+  store-wide form of the coverage rule above: sessions were fetched that the
+  listing had never heard of.
+- **A count mismatch** between what the ledger says was fetched and what is on
+  disk. The direction tells you what happened: *store < ledger* means rows were
+  lost after being recorded; *store > ledger* means rows were written and never
+  recorded, which is what a `SIGTERM` between the write and the flush produces.
+
+Writes are staged and renamed into place, so a killed process leaves whole files
+or none. `check` finds damage from anything that got there another way.
+
+### Completeness, not quality
+
+`coverage()` answers whether every day in a window is accounted for. It never
+judges whether the prices are any good — a crossed quote or a mid below
+intrinsic is a judgement call that belongs to the consumer, not to one
+researcher's opinion baked into everybody's data.
+
+```
+AAPL option_eod via thetadata for 2026-08-10 .. 2026-08-28: 17064 rows, complete
+```
+
+`missing` was never fetched. `denied` the source refused and will refuse again.
+Keeping them apart is what stops a fetch loop retrying a permanent answer.
+
+**An option answer is only as good as the expiration listing behind it.** The
+plan divides work by that listing, so a gap in an expiration the listing never
+knew about cannot appear in `missing`. The test is exact rather than a guess at
+a TTL, and it rests on one fact: **an expiration is always listed before it
+trades**, and the vendor's listing is historical.
+
+    listed_at >= window.end   ->  the listing knows every expiration that traded
+    listed_at <  window.end   ->  expirations may have been added since
+
+So a store warmed in March vouches for a January backtest and does not vouch for
+a September one:
+
+```
+AAPL option_eod ... for 2026-01-05 .. 2026-01-09: 10 rows; cannot vouch for this
+window -- the expiration listing was last fetched 2026-01-03, so expirations
+listed since are unknown; re-run fill to refresh it
+```
+
+`Coverage.complete` is False there even with nothing in `missing`. A TTL would
+be wrong in both directions: it would call last night's store stale this
+morning, and say nothing at all about a six-month-old one.
+
+### ThetaData, and what a FREE plan actually serves
+
+Measured against a live key on 2026-08-30, not read off a docs page:
+
+| | |
+|---|---|
+| `stock_history_eod`, `option_history_eod` | works — OHLCV plus the closing NBBO |
+| `option_list_expirations` / `_strikes` | works |
+| everything intraday | `PERMISSION_DENIED` |
+| open interest, vendor greeks, flat files | `PERMISSION_DENIED` |
+
+So the adapter serves EOD and only EOD — that is the entire free entitlement,
+and a table it cannot fill is better absent than half-populated. Four limits
+shape the planner:
+
+- **A rolling history horizon.** A FREE plan reached back to **2023-07-10** when
+  measured on 2026-08-30. Crossing it fails the whole request, so the plan
+  clamps first; `antlia-history horizon` re-measures it in about
+  eleven requests when the window has moved.
+- **365 days per request, inclusive.** 366 is an `INVALID_ARGUMENT`.
+- **A non-trading day raises rather than returning an empty frame.** Treating
+  that as a failure would abort a run on every market holiday.
+- **`strike="*"` fetches a whole expiration in one call** — a few hundred rows a
+  second, which is the real cost of a warm-up: about 35s for one expiration over
+  a 90-day window.
+
+### What this data is, and is not
+
+Measured, not assumed. Read this before a backtest believes anything.
+
+**Prices are unadjusted.** `raw/` stores what the vendor sent, and ThetaData
+sends as-traded prices. Across NVDA's 10:1 split on 2024-06-10 — inside the
+free plan's own window — the series does this:
+
+```
+NVDA  2024-06-07  close 1208.88
+NVDA  2024-06-10  close  121.79
+```
+
+Unadjusted is the *right* thing for `raw/` and often the right thing for
+options work, because the contract terms were adjusted too. But **antlia
+currently ships no corporate-actions table and issues no warning**, and
+ThetaData 1.0.x has no endpoint for one (66 methods, none of them splits or
+dividends). Until that gap is filled, a naive return series over any symbol
+that split in the window is wrong and nothing will tell you.
+
+**The closing quote is a post-close snapshot.** `stamp` lands at 17:15–17:18
+New York, about 75 minutes after the equity-option close. The quotes are
+usable, not fictional — but they are not the 16:00 print, and filling at their
+mid is not a fill you could have got. Measured on one week of AAPL:
+
+| mid price | rows | median spread |
+|---|---|---|
+| < $0.10 | 315 | 100% |
+| $0.10–1 | 396 | 24.7% |
+| $1–5 | 290 | 9.4% |
+| > $5 | 2092 | 6.3% |
+
+Of 4,254 chain rows, 1,161 had a zero bid and 1,931 no volume at all — normal
+for a full chain, and exactly the judgement call antlia leaves to you. **Zero
+rows were crossed**, so the data is clean in the way that matters.
+
+**Not available on the free plan**: open interest, vendor greeks and implied
+volatility, anything intraday. No open interest means liquidity can only be
+filtered on same-day volume, which is not the same question. No greeks means
+antlia alone cannot serve an IV strategy — and antlia may not compute them
+(that is a feature definition, and out of bounds here).
+
+**Also absent, by design or by gap**: a trading calendar (so `complete` means
+"every day is accounted for", not "every trading day has rows"), a spot-to-chain
+join (two tables; you join them), and delisted symbols (no survivorship-free
+universe).
+
+### Looking at what is cached
+
+```bash
+antlia-history                    # store root, files and symbols per table
+python scripts/history_probe.py option_eod AAPL --start 2026-08-10 --end 2026-08-28
+```
+
+The probe prints `coverage()` and then breaks in the debugger with the rows
+bound three ways — `table` (pyarrow), `df` (pandas), `pf` (polars) — so you can
+check both halves of the question at once: is it cached, and can it be handed to
+a consumer. It fetches nothing unless given `--fetch`.
+
+### Adding a source
+
+The package is laid out so the central rule is visible: `reads.py` holds the
+read surfaces, `writes.py` the one write path, `listing.py` the expiration
+listing they both plan from, and `__init__.py` nothing but re-exports.
+
+A `HistorySource` supplies four things: what it can serve, how work divides into
+scopes, how to fetch one scope (returning **the vendor's frame, unmodified**),
+and a `{canonical column: SQL expression}` projection. The reader, the cache,
+the coverage ledger and every consumer stay exactly as they are — no consumer
+can tell which vendor answered.
+
 ## Using antlia from another project
 
 ```bash
-uv add "antlia[ibkr,trading212] @ /path/to/antlia"     # or a git URL
+uv add "antlia[ibkr,trading212,store,thetadata] @ /path/to/antlia"   # or a git URL
 ```
 
 Then, from anywhere — credentials live in `~/.antlia/`, so nothing depends on
@@ -363,11 +669,15 @@ Four things to know before wiring it in:
   library, so a plain `pip install antlia` can still convert currencies;
   `antlia[yfinance]` upgrades the primary source from a daily fixing to a market
   rate.
+- **`history` needs `antlia[store]`** for DuckDB and pyarrow, plus the extra for
+  whichever vendor fills it (`antlia[store,thetadata]`). Reading a warmed store
+  needs no vendor extra at all — a machine that only runs backtests never has to
+  install the SDK.
 
 ## Development
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev --extra store
 uv run pytest
 uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
