@@ -50,6 +50,7 @@ from antlia.auth.pool import (
     limiter,
     open_sessions,
     session,
+    verify,
 )
 from antlia.auth.ratelimit import (
     Limiter,
@@ -66,6 +67,8 @@ __all__ = [
     # the two calls most consumers need
     "session",
     "credential",
+    # proving a session is usable, not merely open
+    "verify",
     # lifecycle
     "close",
     "close_all",

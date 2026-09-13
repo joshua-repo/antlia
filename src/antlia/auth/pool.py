@@ -128,6 +128,31 @@ def session(source: str, profile: str | None = None, **overrides: Any) -> Iterat
             entry.lock.release()
 
 
+def verify(source: str, profile: str | None = None, **overrides: Any) -> str:
+    """Open a session and prove it actually works. The third of the three levels.
+
+    *Resolves* means the settings were found; *connects* means an object was
+    constructed; **verifies** means one cheap real round-trip came back. Returns
+    the provider's short human-readable note, or raises `ConnectionFailed`.
+
+        auth.verify("ibkr", "live")   # 'server v176, accounts [U1234567]'
+
+    Reaching for this rather than "did my first real call succeed" matters most
+    where a half-open session answers without complaining. IBKR's gateway
+    accepts the socket while IBC is still logging in, and
+    `account.snapshot()` against that state returns a *successful* snapshot with
+    no account and no positions -- indistinguishable, to a caller checking for
+    an exception, from a genuinely empty portfolio. `verify()` is what turns
+    that into an error, because the provider checks `managedAccounts()` rather
+    than trusting the socket.
+
+    Uses the pool like any other caller, so verifying a source you are about to
+    read costs no extra connection.
+    """
+    with session(source, profile, **overrides) as handle:
+        return registry.get(source).verify(handle)
+
+
 def limiter(source: str, profile: str | None = None) -> Limiter:
     """The rate limiter for a source, for callers that must pace themselves.
 

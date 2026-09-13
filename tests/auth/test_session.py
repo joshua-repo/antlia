@@ -230,3 +230,60 @@ class TestThreadSafety:
     def test_ibkr_declares_itself_single_threaded(self):
         assert auth.provider("ibkr").spec.thread_safe is False
         assert auth.provider("trading212").spec.thread_safe is True
+
+
+class VerifyingProvider(FakeProvider):
+    """A source whose socket opens long before the session is usable.
+
+    Modelled on IBKR's gateway, which accepts the connection while IBC is still
+    logging in -- `connect()` succeeds and the session is still worthless.
+    """
+
+    spec = SourceSpec(
+        name="verifying",
+        fields=(Field("api_key", secret=True),),
+        identity=("api_key",),
+        rate=5.0,
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.usable = True
+        self.verifies = 0
+
+    def verify(self, handle):
+        self.verifies += 1
+        if not self.usable:
+            raise ConnectionFailed("verifying", "connected but still logging in")
+        return "usable"
+
+
+@pytest.fixture
+def verifying(config):
+    config('[verifying]\napi_key = "k"\n')
+    provider = VerifyingProvider()
+    auth.register("verifying", provider)
+    return provider
+
+
+def test_verify_returns_the_providers_note(verifying):
+    assert auth.verify("verifying") == "usable"
+
+
+def test_verify_raises_when_the_session_is_open_but_useless(verifying):
+    verifying.usable = False
+    with pytest.raises(ConnectionFailed, match="still logging in"):
+        auth.verify("verifying")
+
+
+def test_verify_reuses_the_pooled_connection(verifying):
+    """Verifying a source you are about to read must not cost a second connect."""
+    with auth.session("verifying"):
+        auth.verify("verifying")
+    assert verifying.connects == 1
+    assert verifying.verifies == 1
+
+
+def test_verify_defaults_to_the_providers_own_answer(fake):
+    """A source that defines no check says so rather than claiming success."""
+    assert "no verification defined" in auth.verify("fake")
