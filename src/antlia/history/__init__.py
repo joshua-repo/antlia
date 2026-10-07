@@ -53,6 +53,7 @@ from antlia.history.reads import (
     equity_eod,
     ingests,
     option_eod,
+    rate_daily,
     symbols,
 )
 from antlia.history.registry import chain, register, source, unregister
@@ -91,6 +92,7 @@ __all__ = [
     "option_eod",
     "path",
     "plan",
+    "rate_daily",
     "register",
     "source",
     "symbols",

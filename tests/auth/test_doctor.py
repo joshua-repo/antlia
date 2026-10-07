@@ -39,8 +39,9 @@ def only_fake(config):
     config('[fake]\napi_key = "k"\n')
     provider = Fake()
     auth.register("fake", provider)
-    for name in ["ibkr", "thetadata", "trading212", "yfinance"]:
-        auth.unregister(name)
+    for name in auth.registry.sources():
+        if name != "fake":
+            auth.unregister(name)
     return provider
 
 

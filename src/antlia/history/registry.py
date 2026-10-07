@@ -28,6 +28,7 @@ from antlia.history.store import root
 
 _BUILTIN: dict[str, str] = {
     "thetadata": "antlia.history.sources.thetadata:ThetaDataHistory",
+    "fred": "antlia.history.sources.fred:FredHistory",
 }
 
 _paths: dict[str, str] = dict(_BUILTIN)
@@ -63,11 +64,23 @@ def chain() -> list[str]:
         return list(_paths)
 
 
-def default() -> str:
+def default(table: str | None = None) -> str:
+    """The first source in the chain -- or the first that serves `table`.
+
+    Sources serve different tables (ThetaData the market tables, FRED the rate
+    series), so "the default" is a per-table answer. Asking reads each
+    adapter's `tables`, which imports the adapter module but never its SDK.
+    """
     with _lock:
         if not _paths:
             raise UnknownSource("", _paths)
-        return next(iter(_paths))
+        names = list(_paths)
+    if table is None:
+        return names[0]
+    for name in names:
+        if table in get(name).tables:
+            return name
+    raise UnknownSource(f"(none serves {table})", names)
 
 
 def source(name: str | None = None) -> HistorySource:
@@ -79,7 +92,9 @@ def source(name: str | None = None) -> HistorySource:
     return get(name or default())
 
 
-def bind(source: str | None, store: str | Path | None) -> tuple[Path, HistorySource]:
+def bind(
+    source: str | None, store: str | Path | None, table: str | None = None
+) -> tuple[Path, HistorySource]:
     """The store root and the adapter a call is about.
 
     Every entry point needs both and resolves them the same way, so "which
@@ -88,7 +103,7 @@ def bind(source: str | None, store: str | Path | None) -> tuple[Path, HistorySou
     because resolving a name is this module's job; the tier below must not
     know that adapters exist.
     """
-    return root(store), get(source or default())
+    return root(store), get(source or default(table))
 
 
 def get(name: str) -> HistorySource:

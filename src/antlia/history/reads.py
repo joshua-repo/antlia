@@ -37,7 +37,7 @@ def default_fetch() -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
-def _match(symbol: str | Sequence[str]) -> tuple[str, list[str]]:
+def _match(symbol: str | Sequence[str], column: str = "symbol") -> tuple[str, list[str]]:
     """A `symbol` predicate for one name or several, and the names it binds.
 
     Reads take a universe because a pooled backtest wants one frame with a
@@ -49,8 +49,8 @@ def _match(symbol: str | Sequence[str]) -> tuple[str, list[str]]:
     if not names:
         raise ValueError("no symbol given")
     if len(names) == 1:
-        return '"symbol" = ?', names
-    return f'"symbol" IN ({", ".join("?" for _ in names)})', names
+        return f'"{column}" = ?', names
+    return f'"{column}" IN ({", ".join("?" for _ in names)})', names
 
 
 def _as_frame(data: Any, frame: Frame) -> Any:
@@ -91,10 +91,10 @@ def _read(
     params: list[Any],
     **options: Any,
 ) -> Any:
-    base, src = registry.bind(source, store)
+    base, src = registry.bind(source, store, table_name)
     spec = spec_for(table_name)
     span = window_for(start, end)
-    predicate, names = _match(symbol)
+    predicate, names = _match(symbol, spec.subject)
 
     if fetch is None:
         fetch = default_fetch()
@@ -164,6 +164,44 @@ def equity_eod(
         latest=latest,
         as_of=as_of,
         workers=workers,
+        where=[],
+        params=[],
+    )
+
+
+def rate_daily(
+    series: str | Sequence[str],
+    start: str | dt.date,
+    end: str | dt.date,
+    *,
+    source: str | None = None,
+    fetch: bool | None = None,
+    frame: Frame = "arrow",
+    store: str | Path | None = None,
+    latest: bool = True,
+    as_of: dt.datetime | None = None,
+) -> Any:
+    """Daily interest rates, one row per series per observation date.
+
+    `series` is antlia's name (`"UST_3M"`, `"SOFR"`, ...), never a vendor's.
+    `rate` is annualised and a decimal -- 0.0422, not 4.22 -- on the series' own
+    basis, and NULL where the source published no value for a date.
+
+    The default source is the first in the chain that serves `rate_daily`, so
+    naming none reaches FRED while `equity_eod` still reaches ThetaData.
+    """
+    return _read(
+        "rate_daily",
+        series,
+        start,
+        end,
+        source=source,
+        fetch=fetch,
+        frame=frame,
+        store=store,
+        latest=latest,
+        as_of=as_of,
+        workers=1,
         where=[],
         params=[],
     )
@@ -275,7 +313,7 @@ def coverage(
     in an expiration the listing never knew about is not a gap this function
     could have found.
     """
-    base, src = registry.bind(source, store)
+    base, src = registry.bind(source, store, table_name)
     spec = spec_for(table_name)
 
     held = ledger.windows(base, src.name, spec.name, symbol)
@@ -340,7 +378,7 @@ def ingests(
     produced". To reproduce a past study use the timestamp that study recorded;
     to reproduce the state before a restatement, the last one from before it.
     """
-    base, src = registry.bind(source, store)
+    base, src = registry.bind(source, store, table_name)
     return storage.ingests(base, src.name, spec_for(table_name), symbol)
 
 
@@ -348,7 +386,7 @@ def symbols(
     table_name: str, *, source: str | None = None, store: str | Path | None = None
 ) -> list[str]:
     """Every symbol the store has been asked about for this table."""
-    base, src = registry.bind(source, store)
+    base, src = registry.bind(source, store, table_name)
     return ledger.symbols(base, src.name, spec_for(table_name).name)
 
 
@@ -359,5 +397,6 @@ __all__ = [
     "equity_eod",
     "ingests",
     "option_eod",
+    "rate_daily",
     "symbols",
 ]

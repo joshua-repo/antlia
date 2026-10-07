@@ -57,7 +57,7 @@ def fill(
     can never have a second version and `latest=`/`as_of=` have nothing to
     choose between.
     """
-    base, src = registry.bind(source, store)
+    base, src = registry.bind(source, store, table_name)
     # Warming the listing is part of the fill, so every later read of this
     # store -- and every `coverage()` -- can plan offline.
     scoped = listing.planned(table_name, symbol, options, source=source, store=store, fetch=True)
@@ -93,7 +93,7 @@ def plan(
     call -- which is then cached, and never paid for again. None of the
     requests it describes are made.
     """
-    base, src = registry.bind(source, store)
+    base, src = registry.bind(source, store, table_name)
     scoped = listing.planned(table_name, symbol, options, source=source, store=store, fetch=None)
     return ingest.plan(
         base,

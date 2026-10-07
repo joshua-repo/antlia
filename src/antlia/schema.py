@@ -91,3 +91,14 @@ class Dataset:
     @property
     def names(self) -> tuple[str, ...]:
         return tuple(c.name for c in self.all_columns)
+
+    @property
+    def subject(self) -> str:
+        """The column naming what a row is about: `symbol`, `series`, `currency`.
+
+        The first identity column of the dataset's class. It is what a read
+        filters on and what the ledger calls a symbol, and every source must
+        put a column of this name in its raw frame -- appending it from the
+        request if the vendor did not send it back.
+        """
+        return IDENTITY[self.asset][0].name

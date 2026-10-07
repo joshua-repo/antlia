@@ -124,11 +124,30 @@ EXPIRATIONS = Dataset(
     provenance=PROVENANCE,
 )
 
-TABLES: dict[str, TableSpec] = {t.name: t for t in (EQUITY_EOD, OPTION_EOD, EXPIRATIONS)}
+RATE_DAILY = Dataset(
+    name="rate_daily",
+    asset=Asset.RATE,
+    key=("date", "series"),
+    columns=(
+        Column("date", "DATE", "the observation date the series assigns"),
+        *IDENTITY[Asset.RATE],
+        Column(
+            "rate",
+            "DOUBLE",
+            "annualised, as a decimal (0.0422 is 4.22%), on the series' own basis",
+        ),
+    ),
+    doc="One row per series per observation date: an interest rate.",
+    provenance=PROVENANCE,
+)
+
+TABLES: dict[str, TableSpec] = {
+    t.name: t for t in (EQUITY_EOD, OPTION_EOD, EXPIRATIONS, RATE_DAILY)
+}
 
 #: Tables laid out one directory per session date. `expirations` is not one of
 #: them: it is a listing about a symbol, not an observation about a day.
-DATED: frozenset[str] = frozenset({"equity_eod", "option_eod"})
+DATED: frozenset[str] = frozenset({"equity_eod", "option_eod", "rate_daily"})
 
 
 def table(name: str) -> TableSpec:

@@ -43,6 +43,7 @@ object (`ib_insync.IB`, `httpx.Client`, …), not a wrapper.
 
 | source | shape | profiles | extra |
 |---|---|---|---|
+| `fred` | free API key, plain HTTPS | — | none |
 | `ibkr` | socket to a running TWS / IB Gateway | `paper` (7497), `live` (7496) | `antlia[ibkr]` |
 | `thetadata` | API key, or email+password (cloud gRPC) | — | `antlia[thetadata]` |
 | `trading212` | key + secret, HTTP Basic | `live`, `demo` | `antlia[trading212]` |
@@ -284,7 +285,13 @@ history.coverage("option_eod", "AAPL", "2026-08-10", "2026-08-28")
 
 # A read takes a universe; one frame, and the `symbol` column tells them apart.
 history.equity_eod(["AAPL", "MSFT"], "2026-08-17", "2026-08-28")
+
+# Interest rates, by antlia's series name: annualised decimals (0.0422 = 4.22%).
+history.rate_daily(["UST_3M", "SOFR"], "2026-01-01", "2026-09-30")
 ```
+
+Naming no source reaches the first one that serves the table: ThetaData for
+`equity_eod` and `option_eod`, FRED for `rate_daily`.
 
 Reads return a **`pyarrow.Table`**; `frame="pandas"` or `frame="polars"`
 converts, and imports that library only when you ask for it.
@@ -504,6 +511,27 @@ shape the planner:
 - **`strike="*"` fetches a whole expiration in one call** — a few hundred rows a
   second, which is the real cost of a warm-up: about 35s for one expiration over
   a 90-day window.
+
+### Sessions are fetched only once they are published
+
+A vendor asked about a session it has not summarised yet answers for the rest
+of the window and says nothing about that day. Each source therefore declares
+`latest()`, the newest session it has published, and the plan stops there:
+ThetaData's EOD row counts as published at 18:00 New York, and a FRED rate two
+business days after the last finished business day (rates are published the
+next afternoon). A fill run before then leaves today unfetched rather than
+recording it as held, `Plan` names the span as not yet published, and
+`coverage()` counts it as missing.
+
+### FRED, for interest rates
+
+`rate_daily` comes from FRED's API, which needs a free key
+(fred.stlouisfed.org/docs/api/api_key.html) under `[fred] api_key` in
+`~/.antlia/credentials.toml`, and nothing installed beyond antlia. Series are
+named by antlia -- `UST_1M`, `UST_3M`, `UST_6M`, `UST_1Y`, `UST_2Y`, `UST_10Y`
+(Treasury constant maturity), `TBILL_3M` (discount basis), `SOFR`, `EFFR` -- and
+mapped to FRED's ids inside the adapter. `raw/` keeps FRED's observations as
+sent, `"."` for a missing value included; that reads back as NULL, not zero.
 
 ### What this data is, and is not
 

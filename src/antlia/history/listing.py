@@ -51,7 +51,7 @@ def expirations(
     """
     from antlia.history.reads import default_fetch
 
-    base, src = registry.bind(source, store)
+    base, src = registry.bind(source, store, "expirations")
     spec = table("expirations")
     today = dt.date.today()
 
@@ -104,6 +104,6 @@ def planned(
         "expirations",
         symbol,
         [],
-        source or registry.default(),
+        source or registry.default("expirations"),
         fix=f"antlia-history fill option_eod {symbol} --start ... --end ...",
     )
