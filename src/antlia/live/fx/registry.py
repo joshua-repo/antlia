@@ -1,7 +1,7 @@
 """Source name -> rate adapter, resolved lazily, in the order they are tried.
 
 Same lazy "module:attr" shape as `antlia.auth.registry`, for the same
-reason: importing `antlia.fx` must not
+reason: importing `antlia.live.fx` must not
 drag in yfinance.
 
 **The one difference is that order is meaningful here, so the listing is not
@@ -22,14 +22,14 @@ import importlib
 import threading
 
 from antlia.auth.errors import UnknownSource
-from antlia.fx.base import RateSource
+from antlia.live.fx.base import RateSource
 
 #: Insertion order is the fallback order. yfinance is first because it is a
 #: market rate that reconciles with the broker's own screen; Frankfurter is the
 #: ECB's 16:00 CET fixing and can sit a day behind the market.
 _BUILTIN: dict[str, str] = {
-    "yfinance": "antlia.fx.sources.yfinance:YFinanceRates",
-    "frankfurter": "antlia.fx.sources.frankfurter:FrankfurterRates",
+    "yfinance": "antlia.live.fx.sources.yfinance:YFinanceRates",
+    "frankfurter": "antlia.live.fx.sources.frankfurter:FrankfurterRates",
 }
 
 _paths: dict[str, str] = dict(_BUILTIN)

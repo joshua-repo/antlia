@@ -1,13 +1,13 @@
-"""`python -m antlia.fx` -- the admin surface, not a product one."""
+"""`python -m antlia.live.fx` -- the admin surface, not a product one."""
 
 from __future__ import annotations
 
 import pytest
 
-from antlia import fx
 from antlia.auth.errors import ConnectionFailed
-from antlia.fx.__main__ import main
-from tests.fx.fakes import FakeRates
+from antlia.live import fx
+from antlia.live.fx.__main__ import main
+from tests.live.fx.fakes import FakeRates
 
 MARKET = {"USD": 1.0, "GBP": 0.73869, "JPY": 160.038, "HKD": 7.8391}
 
@@ -85,7 +85,7 @@ def test_stale_is_announced(capsys):
 
 
 def test_clear_cache_removes_the_file(capsys):
-    from antlia.fx import cache
+    from antlia.live.fx import cache
 
     main(["-c", "USD,GBP"])
     assert cache.path().exists()

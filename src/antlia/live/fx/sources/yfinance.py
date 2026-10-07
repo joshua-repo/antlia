@@ -32,9 +32,9 @@ from datetime import datetime
 from typing import Any
 
 from antlia import auth
-from antlia.fx.base import RateSource, utc, wanted
-from antlia.fx.errors import RatesUnavailable
-from antlia.fx.types import PIVOT, RateTable
+from antlia.live.fx.base import RateSource, utc, wanted
+from antlia.live.fx.errors import RatesUnavailable
+from antlia.live.fx.types import PIVOT, RateTable
 
 #: Enough history that a weekend or a holiday still yields a close.
 PERIOD = "5d"

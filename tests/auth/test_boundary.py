@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
 
 def run(code: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
@@ -45,23 +47,27 @@ def test_auth_needs_no_third_party_package():
     assert out.strip() == "[]"
 
 
-def test_fx_imports_auth_and_nothing_else_from_antlia():
-    # The dependency order is auth <- fx. fx must not reach for history.
+def test_live_imports_auth_and_nothing_else_from_antlia():
+    # The dependency order is auth, schema <- live. live must not reach for
+    # history: recording a live answer is history's write path calling in,
+    # never live reaching out.
     out = run(
-        "import antlia.fx, sys;"
+        "import antlia.live, sys;"
         "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
-        " and not m.startswith(('antlia.auth', 'antlia.fx'))}))"
+        " and not m.startswith(('antlia.auth', 'antlia.live', 'antlia.schema'))}))"
     ).stdout
     assert out.strip() == "[]"
 
 
-def test_importing_fx_pulls_in_no_vendor_sdk():
+@pytest.mark.parametrize("module", ["antlia.live.fx", "antlia.fx"])
+def test_importing_fx_pulls_in_no_vendor_sdk(module):
     # The whole chain is lazy: the frankfurter fallback runs on the stdlib
-    # alone, so `antlia[yfinance]` is a preference, not an install cost.
+    # alone, so `antlia[yfinance]` is a preference, not an install cost. The
+    # old name is held to the same rule as the new one.
     out = run(
         "import sys;"
         "before = set(sys.modules);"
-        "import antlia.fx;"
+        f"import {module};"
         "added = {m.split('.')[0] for m in set(sys.modules) - before};"
         "print(sorted(added & {'ib_insync', 'thetadata', 'yfinance', 'httpx', 'pandas'}))"
     ).stdout
@@ -70,7 +76,7 @@ def test_importing_fx_pulls_in_no_vendor_sdk():
 
 def test_history_imports_auth_and_nothing_else_from_antlia():
     # The dependency order is auth, schema <- history. history must not reach
-    # for fx or live: it is a read surface of its own, not a composition.
+    # for live: it is a read surface of its own, not a composition.
     out = run(
         "import antlia.history, sys;"
         "print(sorted({m for m in sys.modules if m.startswith('antlia.')"

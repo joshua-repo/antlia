@@ -7,10 +7,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from antlia import fx
 from antlia.auth.errors import ConnectionFailed, MissingExtra, UnknownSource
-from antlia.fx import cache
-from tests.fx.fakes import FakeRates
+from antlia.live import fx
+from antlia.live.fx import cache
+from tests.live.fx.fakes import FakeRates
 
 MARKET = {"USD": 1.0, "GBP": 0.73869, "JPY": 160.038}
 FIXING = {"USD": 1.0, "GBP": 0.73624, "JPY": 159.68}

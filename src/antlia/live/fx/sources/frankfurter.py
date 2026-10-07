@@ -33,9 +33,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from antlia.auth.ratelimit import endpoint_limiter
-from antlia.fx.base import RateSource, wanted
-from antlia.fx.errors import RatesUnavailable
-from antlia.fx.types import PIVOT, RateTable
+from antlia.live.fx.base import RateSource, wanted
+from antlia.live.fx.errors import RatesUnavailable
+from antlia.live.fx.types import PIVOT, RateTable
 
 URL = "https://api.frankfurter.dev/v1/latest"
 TIMEOUT = 15.0

@@ -1,12 +1,12 @@
-"""`python -m antlia.fx` -- show the rate table, and prove each source answers.
+"""`python -m antlia.live.fx` -- show the rate table, and prove each source answers.
 
-    python -m antlia.fx                          # the table, cache or live
-    python -m antlia.fx -c USD,GBP,JPY,HKD       # a different currency set
-    python -m antlia.fx --fresh                  # ignore the cache
-    python -m antlia.fx --verify                 # every source, live, in turn
-    python -m antlia.fx --convert 83289.64 GBP USD
-    python -m antlia.fx --json
-    python -m antlia.fx --clear-cache
+    python -m antlia.live.fx                          # the table, cache or live
+    python -m antlia.live.fx -c USD,GBP,JPY,HKD       # a different currency set
+    python -m antlia.live.fx --fresh                  # ignore the cache
+    python -m antlia.live.fx --verify                 # every source, live, in turn
+    python -m antlia.live.fx --convert 83289.64 GBP USD
+    python -m antlia.live.fx --json
+    python -m antlia.live.fx --clear-cache
 
 Admin plumbing, like `antlia.auth`'s doctor. The same
 three-level distinction applies: that a source is *registered* says nothing
@@ -23,8 +23,8 @@ import json
 import sys
 
 from antlia.auth.errors import AuthError
-from antlia.fx import cache, rates, registry
-from antlia.fx.types import DEFAULT_CURRENCIES, RateTable
+from antlia.live.fx import cache, rates, registry
+from antlia.live.fx.types import DEFAULT_CURRENCIES, RateTable
 
 OK, BAD = "ok", "--"
 
@@ -70,7 +70,7 @@ def verify(names: list[str], currencies: tuple[str, ...]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m antlia.fx", description=__doc__)
+    parser = argparse.ArgumentParser(prog="python -m antlia.live.fx", description=__doc__)
     parser.add_argument(
         "-c",
         "--currencies",

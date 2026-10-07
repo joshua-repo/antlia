@@ -8,8 +8,8 @@ from typing import Any
 from antlia.auth.base import Provider
 from antlia.auth.errors import ConnectionFailed
 from antlia.auth.spec import SourceSpec
-from antlia.fx.base import RateSource
-from antlia.fx.types import PIVOT, RateTable
+from antlia.live.fx.base import RateSource
+from antlia.live.fx.types import PIVOT, RateTable
 
 STAMP = datetime(2026, 8, 28, 16, 0, tzinfo=UTC)
 

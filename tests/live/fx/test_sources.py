@@ -18,9 +18,9 @@ import pytest
 
 from antlia import auth
 from antlia.auth.errors import ConnectionFailed
-from antlia.fx.sources.frankfurter import USER_AGENT, FrankfurterRates
-from antlia.fx.sources.yfinance import YFinanceRates
-from tests.fx.fakes import BrokenYFProvider, FakeYFHandle, FakeYFProvider
+from antlia.live.fx.sources.frankfurter import USER_AGENT, FrankfurterRates
+from antlia.live.fx.sources.yfinance import YFinanceRates
+from tests.live.fx.fakes import BrokenYFProvider, FakeYFHandle, FakeYFProvider
 
 pd = pytest.importorskip("pandas")
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 
 from antlia.auth import pool, ratelimit, registry
-from antlia.fx import registry as fx_registry
 from antlia.gateway import registry as gateway_registry
 from antlia.history import registry as history_registry
+from antlia.live.fx import registry as fx_registry
 
 
 @pytest.fixture(autouse=True)

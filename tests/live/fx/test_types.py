@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from antlia.fx.types import PIVOT, RateTable
+from antlia.live.fx.types import PIVOT, RateTable
 
 # The rates measured on 2026-08-28/29, so the arithmetic below is checkable
 # against a real screen rather than against round numbers.

@@ -38,8 +38,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from antlia.auth.credentials import home
-from antlia.fx.base import utc
-from antlia.fx.types import RateTable
+from antlia.live.fx.base import utc
+from antlia.live.fx.types import RateTable
 
 FILENAME = "fx.json"
 

@@ -9,15 +9,23 @@ It is a library. Other projects import it; it is the one place they get data
 from, so a backtest, a screen and a dashboard cannot quietly disagree about what
 happened.
 
-Five parts, of which four are built:
+Data is laid out on two axes. **Access** decides what a read promises:
+`history` is fixed (given `as_of`, the same rows forever) and cached;
+`live` is what a source says right now, stamped and never stored. **Asset
+class** decides what a row is, and is shared by both: a live row and a
+history row for the same instrument carry the same identity columns
+(`antlia.schema`).
 
-| | | |
+| asset class | `history` | `live` |
 |---|---|---|
-| `auth` | credentials, sessions, rate limits | **built** |
-| `fx` | foreign exchange rates, multi-source | **built** (Yahoo, ECB) |
-| `history` | cached historical data, multi-source | **built** (ThetaData) |
-| `gateway` | where a source's gateway is, and how to restart it | **built** (IBKR) |
-| `live` | on-demand live historical pulls | planned |
+| eq | `equity_eod` (ThetaData) | — |
+| option | `option_eod`, `expirations` (ThetaData) | — |
+| fx | — | `live.fx` (Yahoo, then the ECB fixing) |
+| rate | `rate_daily` (FRED) | — |
+
+Beneath them, two pieces of infrastructure that return no market data:
+`auth` (credentials, sessions, rate limits) and `gateway` (where a source's
+gateway is, and how to restart it).
 
 ## `antlia.auth`
 
@@ -182,12 +190,15 @@ class MyProvider(auth.Provider):
 auth.register("mine", MyProvider())
 ```
 
-## `antlia.fx`
+## `antlia.live.fx`
 
 Foreign exchange rates, so figures in different currencies can be added up.
+A live read: the current rate table, cached for six hours so a dashboard does
+not refetch it per render. `antlia.fx` is the same module under the name it
+shipped with.
 
 ```python
-from antlia import fx
+from antlia.live import fx
 
 table = fx.rates(("USD", "GBP", "JPY", "HKD"))
 table.convert(83289.64, "GBP", "USD")  # -> 112753.17
@@ -200,9 +211,9 @@ pivot and every conversion crosses through it, so adding a currency is a
 one-line change.
 
 ```bash
-python -m antlia.fx                             # the table, cache or live
-python -m antlia.fx --verify                    # every source, live, in turn
-python -m antlia.fx --convert 83289.64 GBP USD
+python -m antlia.live.fx                        # the table, cache or live
+python -m antlia.live.fx --verify               # every source, live, in turn
+python -m antlia.live.fx --convert 83289.64 GBP USD
 ```
 
 ### Two sources, tried in order

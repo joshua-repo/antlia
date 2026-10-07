@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from types import ModuleType
 
 from antlia.auth.errors import MissingExtra
-from antlia.fx.types import PIVOT, RateTable
+from antlia.live.fx.types import PIVOT, RateTable
 
 
 def utc(stamp: datetime | None) -> datetime:
