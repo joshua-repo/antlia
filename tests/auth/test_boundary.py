@@ -45,31 +45,8 @@ def test_auth_needs_no_third_party_package():
     assert out.strip() == "[]"
 
 
-def test_account_imports_auth_and_nothing_else_from_antlia():
-    # The dependency order is auth <- account. If account ever reaches for
-    # history, the "three read surfaces, one write path" rule has been broken.
-    out = run(
-        "import antlia.account, sys;"
-        "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
-        " and not m.startswith(('antlia.auth', 'antlia.account'))}))"
-    ).stdout
-    assert out.strip() == "[]"
-
-
-def test_importing_account_pulls_in_no_broker_sdk():
-    out = run(
-        "import sys;"
-        "before = set(sys.modules);"
-        "import antlia.account;"
-        "added = {m.split('.')[0] for m in set(sys.modules) - before};"
-        "print(sorted(added & {'ib_insync', 'thetadata', 'yfinance', 'httpx'}))"
-    ).stdout
-    assert out.strip() == "[]"
-
-
 def test_fx_imports_auth_and_nothing_else_from_antlia():
-    # The dependency order is auth <- fx. fx must not reach for account (a
-    # broker's rate is deliberately not an FX source) nor for history.
+    # The dependency order is auth <- fx. fx must not reach for history.
     out = run(
         "import antlia.fx, sys;"
         "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
@@ -93,7 +70,7 @@ def test_importing_fx_pulls_in_no_vendor_sdk():
 
 def test_history_imports_auth_and_nothing_else_from_antlia():
     # The dependency order is auth <- history. history must not reach for
-    # account or fx: it is a read surface of its own, not a composition.
+    # fx: it is a read surface of its own, not a composition.
     out = run(
         "import antlia.history, sys;"
         "print(sorted({m for m in sys.modules if m.startswith('antlia.')"

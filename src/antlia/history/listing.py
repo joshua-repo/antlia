@@ -25,7 +25,7 @@ from antlia.history import ingest, ledger, registry
 
 # `store` is the keyword every public function takes for the store root, and
 # inside those functions the parameter shadows the module. Aliasing is what
-# keeps this package out of the `account.sources` collision.
+# keeps this package out of that name collision.
 from antlia.history import store as storage
 from antlia.history.errors import NotCovered
 from antlia.history.types import Window, as_date, table

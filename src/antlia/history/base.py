@@ -26,8 +26,8 @@ Massive is a `fetch` that calls their client and a projection that names their
 columns -- no reader, no cache, no ingest logic changes, and no consumer of
 `history` can tell which vendor answered.
 
-A source authenticates **through `antlia.auth`**, exactly as `account` and `fx`
-do, and never reimplements resolution, pooling or rate limiting.
+A source authenticates **through `antlia.auth`**, exactly as `fx`
+does, and never reimplements resolution, pooling or rate limiting.
 """
 
 from __future__ import annotations

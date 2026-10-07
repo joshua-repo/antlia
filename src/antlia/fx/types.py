@@ -4,7 +4,7 @@ One shape, whichever source answered. A consumer that has to know whether a
 rate came from Yahoo or from the ECB in order to read it has been handed the
 vendor problem back, which is the thing this layer exists to absorb.
 
-`RateTable` is frozen and stamped for the same reason `account.types` are: it
+`RateTable` is frozen and stamped because it
 is a **reading, not a handle**. FX moves continuously; a table says what was
 true at `as_of`, according to `source`, and says so out loud when it is `stale`.
 """
@@ -57,7 +57,7 @@ class RateTable:
         """Units of `base` per 1 unit of `currency`.
 
         The other orientation, and worth having by name because it is the one
-        brokers report. IBKR's `Balance.exchange_rate` is base-per-unit -- a
+        brokers report. IBKR's own exchange rate is base-per-unit -- a
         USD-based account holding yen carries `0.006247` for JPY, not `160.08`
         -- so this is the number to compare it against. Comparing across
         orientations silently produces a rate that is wrong by a factor of

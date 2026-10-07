@@ -8,7 +8,7 @@
     python -m antlia.fx --json
     python -m antlia.fx --clear-cache
 
-Admin plumbing, like `antlia.auth`'s doctor and `antlia.account`'s. The same
+Admin plumbing, like `antlia.auth`'s doctor. The same
 three-level distinction applies: that a source is *registered* says nothing
 about whether it *answers*. `--verify` is what to debug against, and it is the
 only mode that talks to every source rather than stopping at the first that
@@ -44,7 +44,7 @@ def render(table: RateTable) -> str:
     lines += [
         "",
         "  'per 1 ccy' is the orientation brokers report -- compare it with",
-        "  account.types.Balance.exchange_rate, never the other column.",
+        "  the broker's own exchange rate, never the other column.",
     ]
     return "\n".join(lines)
 

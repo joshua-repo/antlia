@@ -1,7 +1,7 @@
 [project]
 name = "antlia"
 version = "0.1.0"
-description = "Single source of truth for market and account data -- multi-source cache, live pulls, and authentication."
+description = "Single source of truth for market data -- multi-source cache, live pulls, and authentication."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []

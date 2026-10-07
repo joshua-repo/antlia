@@ -1,7 +1,7 @@
 # antlia
 
 The data layer. *Antlia*, the air pump, moves what is in there out to here
-without altering it — this pulls market and account data out of vendor APIs and
+without altering it — this pulls market data out of vendor APIs and
 makes it available in one shape, and resists improving anything on the way
 through.
 
@@ -9,12 +9,11 @@ It is a library. Other projects import it; it is the one place they get data
 from, so a backtest, a screen and a dashboard cannot quietly disagree about what
 happened.
 
-Six parts, of which five are built:
+Five parts, of which four are built:
 
 | | | |
 |---|---|---|
 | `auth` | credentials, sessions, rate limits | **built** |
-| `account` | live account state, multi-source | **built** (IBKR, Trading212) |
 | `fx` | foreign exchange rates, multi-source | **built** (Yahoo, ECB) |
 | `history` | cached historical data, multi-source | **built** (ThetaData) |
 | `gateway` | where a source's gateway is, and how to restart it | **built** (IBKR) |
@@ -182,63 +181,6 @@ class MyProvider(auth.Provider):
 auth.register("mine", MyProvider())
 ```
 
-## `antlia.account`
-
-Live account state — positions, balances, margin, working orders, fills — in one
-canonical schema whichever broker it came from.
-
-```python
-from antlia import account
-
-snap = account.snapshot("ibkr", profile="live")
-snap.margin.excess_liquidity  # headroom, in the account's base currency
-snap.margin.utilisation  # maintenance / net liquidation
-snap.balance("JPY").cash  # per-currency cash
-[p for p in snap.positions if p.instrument.kind == "option"]
-```
-
-`positions()`, `balances()`, `margin()`, `orders()`, `fills()` are views of the
-same snapshot. Authentication and the socket belong to `antlia.auth`; this layer
-only maps. It reads and only reads — reading working orders is in scope, placing
-one never is, and the IBKR session connects `readonly=True` so the broker
-enforces it.
-
-```bash
-python -m antlia.account ibkr -p live          # a readable table
-python -m antlia.account ibkr -p live --json   # the same thing, machine-readable
-```
-
-### The normalisation that matters
-
-**`average_price` and `market_price` are on the same scale.** Brokers do not
-guarantee this: IBKR reports `avgCost` *including* the contract multiplier while
-`marketPrice` excludes it, so an option bought at 2.90 arrives as `290.04`
-beside a market price of `3.50`. Comparing those two is a mistake every consumer
-would otherwise make exactly once. `Position.cost_basis` puts the multiplier
-back when you want money.
-
-Other decisions the canonical schema makes:
-
-- **A multi-currency account reports a `BASE` pseudo-currency** alongside the
-  real ones. It is a consolidated rollup — `Balance.is_consolidated` flags it,
-  and summing without excluding it double-counts.
-- **Margin is denominated in the account's base currency**, read off
-  `NetLiquidation` rather than the `Currency` tag (which appears once per
-  currency held, so picking one is a coin flip that mislabels every figure).
-- **An unreadable value is `None`, never `0.0`.** A zero `day_trades_remaining`
-  is a different and much more alarming claim than "not reported".
-- **`Instrument.ids` keeps the vendor's identifiers verbatim** (`ibkr_conid`,
-  the OCC local symbol). It deliberately does not resolve identity across
-  sources — that is an open question, and a synthetic key would bury it.
-- **`AccountSnapshot.vendor` keeps everything that did not map**, unaltered.
-  Reaching into it from a consumer means the canonical schema is missing a
-  field, which is a change to make here.
-- **Trading212 quotes some lines in a minor unit** (GBX beside GBP, in the same
-  account, with no currency in the payload). The scale is recovered from
-  `ppl = quantity * (current - average) * factor`, accepted only when it lands
-  on a power of ten, and left `None` otherwise — the same failing-closed rule as
-  IBKR's multiplier.
-
 ## `antlia.fx`
 
 Foreign exchange rates, so figures in different currencies can be added up.
@@ -298,9 +240,9 @@ rates cannot be reconciled against either of them. `fx.chain()` shows the order;
   table. Degrading to "no rates" is the consumer's policy, not this layer's.
 - **A broker's rate is not an FX source.** See below.
 
-### A broker's rate stays an account concern
+### A broker's rate is not an FX source
 
-IBKR reports its own rate per currency on `Balance.exchange_rate`, live, and by
+A broker reports its own rate per currency, live, and by
 definition the one its account totals were computed with. That number is **not**
 reachable through `fx`, on purpose:
 
@@ -317,12 +259,12 @@ reachable through `fx`, on purpose:
 So: **restating a broker's own account totals uses that broker's own rate;
 combining across brokers, or converting anything that is not an account, uses
 `fx`.** To compare them, `RateTable.inverse()` is deliberately in the broker's
-orientation — units of base per 1 unit of the currency, which is what
-`Balance.exchange_rate` carries:
+orientation — units of base per 1 unit of the currency, which is how
+IBKR reports it:
 
 ```python
 table.inverse("JPY")  # 0.006248 -- the market
-snap.balance("JPY").exchange_rate  # 0.006247 -- what IBKR valued the account with
+# 0.006247 -- what IBKR valued the account with
 ```
 
 Comparing across orientations instead is wrong by a factor of 25,000 and looks
@@ -770,28 +712,22 @@ broker's own connection is in doubt.
 ## Using antlia from another project
 
 ```bash
-uv add "antlia[ibkr,trading212,store,thetadata] @ /path/to/antlia"   # or a git URL
+uv add "antlia[store,thetadata] @ /path/to/antlia"   # or a git URL
 ```
 
 Then, from anywhere — credentials live in `~/.antlia/`, so nothing depends on
 the working directory:
 
 ```python
-from antlia import account
+from antlia import history
 
-legs = [
-    p for p in account.snapshot("ibkr", profile="live").positions if p.instrument.kind == "option"
-]
+bars = history.equity_eod("AAPL", "2026-08-17", "2026-08-28", frame="pandas")
 ```
 
-Four things to know before wiring it in:
+Three things to know before wiring it in:
 
 - **Python >=3.12**, and ask for the extras you use. A plain `pip install
   antlia` gives you credential resolution and no vendor SDKs at all.
-- **Take one `snapshot()` and read from it.** `positions()`, `balances()`,
-  `margin()`, `orders()` and `fills()` are each a *full* snapshot underneath —
-  four HTTP calls for Trading212 — so calling several in a row multiplies the
-  requests and will meet a rate limit that a single snapshot never does.
 - **Rate limiting is per process.** The token buckets live in memory, so two
   processes hitting the same account share nothing and can collide. Trading212
   requests retry once at the reset the vendor names; beyond that, one long-lived

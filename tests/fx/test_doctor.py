@@ -24,7 +24,7 @@ def test_it_prints_both_orientations(capsys):
     out = capsys.readouterr().out
     assert "0.738690" in out  # per 1 USD
     assert "1.353748" in out  # per 1 GBP -- what a broker reports
-    assert "Balance.exchange_rate" in out
+    assert "broker's own exchange rate" in out
 
 
 def test_convert_reports_the_figure(capsys):

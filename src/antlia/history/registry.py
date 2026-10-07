@@ -5,8 +5,7 @@ Same lazy "module:attr" shape as the other registries: importing
 
 **The listing is `chain()`, not `sources()`** -- `sources` is also this
 package's adapter subpackage, and importing an adapter binds the module over a
-function of that name. `account` has exactly that bug; `fx` avoided it; this
-follows `fx`.
+function of that name. `fx` avoided that collision; this follows `fx`.
 
 Order is insertion order and is the **default preference**, which is as much of
 open question 2 (*source precedence*) as is honestly settled: with one source

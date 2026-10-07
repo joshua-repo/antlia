@@ -1,11 +1,11 @@
 """Source name -> rate adapter, resolved lazily, in the order they are tried.
 
-Same lazy "module:attr" shape as `antlia.auth.registry` and
-`antlia.account.registry`, for the same reason: importing `antlia.fx` must not
+Same lazy "module:attr" shape as `antlia.auth.registry`, for the same
+reason: importing `antlia.fx` must not
 drag in yfinance.
 
 **The one difference is that order is meaningful here, so the listing is not
-sorted.** In `auth` and `account` a caller names the source it wants; in `fx`
+sorted.** In `auth` a caller names the source it wants; in `fx`
 the layer picks, and which source answers first is the difference between a
 market rate and a once-a-day fixing. `chain()` therefore returns insertion
 order -- yfinance, then frankfurter -- and a registered source appends to the

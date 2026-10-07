@@ -36,7 +36,7 @@ Four rules this layer is built around:
 
 ## A broker's rate is not an FX source -- decided 2026-08-29
 
-IBKR reports its own rate per currency on `account.types.Balance.exchange_rate`,
+IBKR reports its own rate per currency on each account balance,
 live, and by definition the one its account totals were computed with. That
 number stays an account concern and is **not** reachable through `fx`:
 
@@ -55,10 +55,10 @@ So the rule is: **restating a broker's own account totals uses that broker's
 own rate; combining across brokers, or converting anything that is not an
 account, uses `fx`.** To compare them, `RateTable.inverse()` is deliberately in
 the broker's orientation (units of base per 1 unit of the currency, which is
-what `Balance.exchange_rate` carries):
+how IBKR reports it):
 
     table.inverse("JPY")                        # 0.006248  -- the market
-    snap.balance("JPY").exchange_rate           # 0.006247  -- IBKR's own
+    # 0.006247 -- IBKR's own, as it reports it
 
 Adding a source is a `RateSource` with a `rates()` and a `register()`.
 """

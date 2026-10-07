@@ -1,8 +1,6 @@
 """The rate table on disk: a TTL, and a copy that outlives a failed fetch.
 
-`account` deliberately never persists anything, because account state is stale
-the moment it is read and a saved snapshot is a lie waiting to be believed.
-Rates are the opposite kind of fact: a six-hour-old USD/GBP is still a usable
+Rates are a fact that keeps: a six-hour-old USD/GBP is still a usable
 USD/GBP, and refetching one per render is the only slow part of a dashboard.
 So this layer caches, and the cache does two jobs:
 

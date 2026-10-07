@@ -40,7 +40,7 @@ def fill(
 
     Named `fill` rather than `ingest` because that is what it does: the module
     it delegates to is `history.ingest`, and a function and a module of one
-    name in one namespace is the collision `account` is still carrying.
+    name in one namespace is a collision waiting to happen.
 
     `limit` caps the vendor requests, so a first look at a wide window can be
     taken without spending a day's budget. A capped run is not a failure -- the

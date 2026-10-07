@@ -8,7 +8,7 @@ currency it could not price hands the caller a table that converts three of
 four positions and silently omits the fourth from a total -- so a source that
 cannot cover the request fails, and the next source in the chain gets its turn.
 
-Like `account`, an adapter authenticates *through* `antlia.auth` where the
+An adapter authenticates *through* `antlia.auth` where the
 source has a session at all, and never reimplements resolution, pooling or
 rate limiting.
 """
