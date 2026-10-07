@@ -9,7 +9,7 @@ It is a library. Other projects import it; it is the one place they get data
 from, so a backtest, a screen and a dashboard cannot quietly disagree about what
 happened.
 
-Five parts, of which four are built:
+Six parts, of which five are built:
 
 | | | |
 |---|---|---|
@@ -17,6 +17,7 @@ Five parts, of which four are built:
 | `account` | live account state, multi-source | **built** (IBKR, Trading212) |
 | `fx` | foreign exchange rates, multi-source | **built** (Yahoo, ECB) |
 | `history` | cached historical data, multi-source | **built** (ThetaData) |
+| `gateway` | where a source's gateway is, and how to restart it | **built** (IBKR) |
 | `live` | on-demand live historical pulls | planned |
 
 ## `antlia.auth`
@@ -633,6 +634,139 @@ and a `{canonical column: SQL expression}` projection. The reader, the cache,
 the coverage ledger and every consumer stay exactly as they are — no consumer
 can tell which vendor answered.
 
+## `antlia.gateway`
+
+Most sources are an HTTP endpoint and a key. One is a **desktop application in
+a container**, and while it is not logged in, every layer above it is dark.
+This module is the small amount of knowledge needed to diagnose and fix that.
+
+```python
+from antlia import gateway
+
+info = gateway.describe("ibkr", "live")
+if info is None:
+    ...  # a REST API: there is nothing to look at
+else:
+    info.screen_url  # noVNC page, password already filled in
+    info.vnc_addr  # "127.0.0.1:5900", for a native viewer
+    info.control  # did IBC's command server answer just now
+
+gateway.restart("ibkr", "live")  # -> IBC's own words, verbatim
+```
+
+```bash
+python -m antlia.gateway              # every gateway, and whether it answers
+python -m antlia.gateway -s ibkr -p live --restart
+```
+
+`None` is the whole protocol for "this source has no gateway", so no consumer
+keeps its own list of which ones do. A name no registry knows raises
+`UnknownSource` instead — a typo must not read as "nothing to see here".
+
+### It cannot log a gateway in, and no version will
+
+IB Gateway has **no headless mode and no login API**. The only way in is a
+Swing dialog; the only thing that types into it is IBC; and IBC has to be
+inside the container. So there is no `TWS_PASSWORD` here and nowhere to put
+one.
+
+```
+IBC (in the container) --drives the login dialog--> IB Gateway
+                             --and only then opens--> :4001 --> antlia.auth
+```
+
+That is why the IBKR settings antlia resolves are `{host, port, client_id,
+readonly, timeout}` — endpoints, with not one secret among them. Trading212's
+`api_key`/`api_secret` look like the same kind of thing and are not: those are
+real API credentials, they belong in `auth`, and merging the two cases would
+put a broker password somewhere it has no business being.
+
+What *is* reachable from outside the container is a picture of the screen and a
+robot that will restart it, and that is exactly what this module exposes.
+
+### `restart()` is a soft restart, not a fresh login
+
+IBC implements it by setting the gateway's own auto-restart a minute ahead —
+its log says `Setting auto-restart time to 11:42 AM` — which is IBKR's
+**session-preserving** restart. It does not re-authenticate and it does **not**
+push a new two-factor notification. Documentation claiming otherwise was
+written once here and disproved by the gateway's own log.
+
+It also needs a UI that can respond: behind a modal dialog, IBC sits on
+`Waiting for config dialog future to complete` indefinitely, and the call times
+out. The two failures are distinguished in the message, because a refusal means
+the command server was never switched on and a timeout means it was.
+
+Errors are prose for a person. `ControlUnavailable` subclasses
+`ConnectionFailed`, so `except ConnectionFailed` still covers it; branch on
+whether it raised, never on the words, and show the words to the reader.
+
+### The command server being off is a normal answer
+
+IBC ships `CommandServerPort=0`, so most gateways have no control channel and
+`control=False` is what a correct, healthy, unmodified deployment looks like.
+`describe()` returns it as a field rather than raising.
+
+`control` is probed on every call, because it is a claim about *right now* and
+a stale "yes" sends someone to a button that cannot work. The screen is
+deliberately not probed: the browser is the better detector, and waiting on a
+second socket doubles the latency of an answer nobody acts on.
+
+### The VNC password is filled into the URL, and must not be persisted
+
+noVNC 1.4 reads `password` from the query string and, with `autoconnect=1`,
+then never draws its credential dialog. That is worth doing for a reason that
+has nothing to do with saving a keystroke: the dialog is an ordinary
+`<input type="password">` in an ordinary web page, so password managers and
+keyboard extensions fight the user for it — inside an iframe as much as
+outside, since extensions inject into every frame. Prefilling removes the field
+rather than winning the fight.
+
+This is the one secret the layer holds, and it protects a view of a screen, not
+an account. The cost is a secret living in a string that looks like
+configuration, so the redaction is built into the type rather than left to each
+caller:
+
+```python
+info.screen_url  # carries the password — hand it to a browser, keep no copy
+info.safe_screen_url  # the same link, asking for it — safe to log or save
+repr(info)  # redacted
+info.redacted()  # redacted
+```
+
+It resolves from `[ibkr] vnc_password`, `$ANTLIA_IBKR_LIVE_VNC_PASSWORD`, and
+finally the plain `$VNC_SERVER_PASSWORD` — the gateway compose project's own
+spelling, so `set -a; . ~/ib-gateway/.env; set +a` is enough to supply it.
+Nothing here reads that project's files; the variable is the whole contract.
+
+### Configuration, and the host side of those ports
+
+Settings live in the source's own section, beside the ones `auth` already
+resolves from there — one broker, one place:
+
+```toml
+[ibkr]
+host = "127.0.0.1"     # the same field auth reads, so a remote gateway is one edit
+control_port = 7462    # IBC's command server; 0 means "not published"
+
+[ibkr.live]
+screen_port = 6080     # the noVNC bridge
+vnc_port = 5900        # the VNC server itself
+```
+
+Any port set to `0` means not published, and that field comes back `None`
+rather than pointing at something that is not there.
+
+The compose override that publishes those ports, the vendored IBC template that
+switches the command server on, and the traps involved in both, are in
+[`ops/ib-gateway/`](ops/ib-gateway/) with their own README. Nothing in there is
+a secret; the credentials stay in the gateway project's own `.env`, outside any
+repository.
+
+**No extras and no vendor SDK.** Like `auth`, this runs on the standard library
+— which is the point, because a gateway is asked about precisely when the
+broker's own connection is in doubt.
+
 ## Using antlia from another project
 
 ```bash
@@ -673,6 +807,9 @@ Four things to know before wiring it in:
   whichever vendor fills it (`antlia[store,thetadata]`). Reading a warmed store
   needs no vendor extra at all — a machine that only runs backtests never has to
   install the SDK.
+- **`gateway` needs no extra either**, deliberately: it answers "is the gateway
+  up, and how do I look at it" without `ib_insync` installed, which is the state
+  you are most likely to be in when you need to ask.
 
 ## Development
 

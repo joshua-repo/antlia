@@ -1,0 +1,118 @@
+# Everything antlia needs from the IB Gateway container, as an override layer.
+#
+#   docker compose up -d      # COMPOSE_FILE in .env names both files
+#
+# The gateway project's own docker-compose.yml is never edited. Compose merges
+# the two: the project name and the `.env` both come from the FIRST file, so
+# credentials still resolve from ~/ib-gateway/.env and this file holds no
+# secrets. Scalars replace, sequences append -- the gateway's existing 4001 and
+# 5900 publications survive (verified with `docker compose config`).
+#
+# TRAP, hit once already: relative paths in an override resolve against the
+# PROJECT directory (~/ib-gateway), not against this file -- which now lives in
+# a different tree entirely. Mount sources must therefore be absolute, or
+# docker silently creates a directory over there.
+#
+# Unlike docker-compose.novnc.yml -- a separate project that merely joins the
+# gateway's network and leaves its container untouched -- this one redefines
+# the gateway service itself, so applying it RECREATES that container. A
+# recreate means a full login, so never apply it while the stored credentials
+# are being rejected: that just spends more failed-login attempts.
+services:
+  ib-gateway:
+    environment:
+      # IBC's command server: the control channel that replaces clicking in
+      # VNC. `RESTART` re-runs IBC's whole automated login, which is what makes
+      # `antlia.gateway.restart` a button rather than a chore. It is IBKR's
+      # session-preserving restart, so it does NOT re-authenticate and does NOT
+      # push a fresh 2FA notification -- see antlia/gateway/ibc.py.
+      IBC_COMMAND_SERVER_PORT: "7462"
+      # Who may send commands. IBC's own note: "Commands can always be sent
+      # from the same host as IBC is running on" -- and that host is the
+      # *container*, so a command from the host needs listing explicitly.
+      #
+      # 172.18.0.1 is this network's bridge gateway, which is the source
+      # address a container actually sees for host traffic arriving through a
+      # published port -- measured, not assumed: the noVNC sidecar logs every
+      # request from the host as "172.18.0.1 - -", and
+      #   docker network inspect ib-gateway_default \
+      #     -f '{{(index .IPAM.Config 0).Gateway}}'
+      # prints the same. Written as a bare address because IBC documents this
+      # setting as "a comma separated list of IP addresses, or host names" --
+      # no CIDR. If the network is ever recreated on a different subnet this
+      # goes stale, and the symptom is commands being refused; re-derive it
+      # with the command above.
+      IBC_CONTROL_FROM: "172.18.0.1"
+      # Must stay EMPTY. Blank means "all local addresses"; setting 127.0.0.1
+      # would bind the container's own loopback, which a published port can
+      # never reach -- and it fails silently.
+      IBC_BIND_ADDRESS: ""
+      # On a 2FA timeout, start the login again (and so push a fresh IB Key
+      # notification) instead of giving up. The dialog's own timeout is 180s,
+      # and the gateway's logs show a real login taking 5m15s -- i.e. the first
+      # push was missed. This is what makes missing one harmless.
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      # Where TWS keeps its settings, including the autorestart file. Without a
+      # persisted path the logs say "autorestart file not found: full
+      # authentication will be required" after every container recreate -- that
+      # file is the difference between a daily soft restart that needs no
+      # re-auth and a full login with 2FA.
+      #
+      # TRAP, and it cost a crash loop: Docker creates a named volume owned by
+      # ROOT, while this image runs as 1000:1000 (ibgateway). The container
+      # then dies on
+      #     common.sh: /home/ibgateway/settings/jts.ini: Permission denied
+      # and, because of `restart: unless-stopped`, restarts forever -- with the
+      # published ports gone, so the symptom is ConnectionRefused on 4001
+      # rather than anything mentioning permissions. It fails before IBC tries
+      # to log in, so at least it costs no login attempts. Chown the volume
+      # once, after it is first created:
+      #
+      #   docker run --rm -v ib-gateway_ib-gateway-settings:/s alpine:3.20 \
+      #     chown -R 1000:1000 /s
+      TWS_SETTINGS_PATH: /home/ibgateway/settings
+      # Point IBC at antlia's copy of the template rather than shadowing the
+      # image's, so the original stays readable in the container and
+      # check-ibc-template.sh (next to this file) can diff the two.
+      IBC_INI_TMPL: /ibc/config.ini.tmpl
+    volumes:
+      - /home/neroo/repo/antlia/ops/ib-gateway/ibc-config.ini.tmpl:/ibc/config.ini.tmpl:ro
+      - ib-gateway-settings:/home/ibgateway/settings
+    ports:
+      - "127.0.0.1:7462:7462"
+
+  # The gateway's screen on a web page. VNC is RFB over raw TCP and browser JS
+  # cannot open a TCP socket, so something has to translate TCP to WebSocket:
+  # noVNC is only the client half, websockify is the bridge. It reaches the
+  # gateway as `ib-gateway:5900` over this project's own network -- no
+  # `external:` reference, because it now lives in the same project.
+  #
+  # It started life as a separate compose project, back when the gateway's
+  # service definition was off limits and a second project was the only way to
+  # add anything without touching it. The override made that moot: this file
+  # already redefines the gateway, so a second project bought nothing and cost
+  # an `external` network reference plus a second command to remember.
+  # Verified before merging: adding a service to a project leaves the existing
+  # containers alone -- same container id, same Created timestamp -- so pulling
+  # noVNC in here cannot cost the gateway a restart.
+  #
+  # Deliberately no `depends_on`. The data path (browser -> pictor -> antlia ->
+  # gateway API) and the picture path (browser -> noVNC -> gateway VNC) are
+  # independent, and coupling their startup would mean `up novnc` also starting
+  # the gateway -- which is a login and a 2FA prompt, for a bridge that is
+  # perfectly happy to wait.
+  #
+  # Stateless and disposable: no mounts, no credentials, no session. It installs
+  # novnc/websockify at start, so give it ~12s. The VNC password is the
+  # gateway's own VNC_SERVER_PASSWORD.
+  novnc:
+    image: alpine:3.20
+    restart: unless-stopped
+    command: >
+      sh -c "apk add --no-cache novnc websockify &&
+             websockify --web /usr/share/novnc 8080 ib-gateway:5900"
+    ports:
+      - "127.0.0.1:6080:8080"
+
+volumes:
+  ib-gateway-settings:

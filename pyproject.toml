@@ -19,10 +19,20 @@ thetadata = ["thetadata>=1.0", "python-dotenv>=1.0"]
 # load step) and pyarrow is what a read hands back. Both are the layer's own
 # machinery, not a consumer's dataframe preference -- pandas and polars stay
 # out, and `frame="pandas"` imports one only when a caller asks for it.
-store = ["duckdb>=1.0", "pyarrow>=16"]
+# pytz is duckdb's undeclared dependency, the same trap as python-dotenv
+# above: converting a TIMESTAMPTZ to a Python object imports it, and
+# `ingested_at` is one -- so `ingests()` and every `as_of=` read need it.
+# It used to arrive transitively via pandas; pandas 3.0 dropped it, which is
+# what made a latent gap into a failure.
+store = ["duckdb>=1.0", "pyarrow>=16", "pytz>=2024.1"]
 trading212 = ["httpx>=0.27"]
 yfinance = ["yfinance>=0.2"]
-dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+# pandas and polars are here and nowhere else: they are a *consumer's*
+# preference, never this library's, so `frame="pandas"` imports one only when
+# a caller asks. The tests that prove that conversion works still need both
+# installed, and without them `uv sync --extra dev --extra store` leaves a
+# suite that fails for a reason that has nothing to do with antlia.
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "pandas>=2.2", "polars>=1.0"]
 
 # The one command antlia ships. It is ingest/admin plumbing -- warming a cache
 # is a batch job you run from a shell or a cron entry, not from inside a

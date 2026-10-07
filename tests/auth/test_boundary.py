@@ -134,3 +134,47 @@ def test_a_history_read_of_a_covered_window_never_authenticates():
         "print(src.calls, pool.open_sessions())"
     ).stdout
     assert out.strip() == "[] []"
+
+
+def test_gateway_imports_auth_and_nothing_else_from_antlia():
+    # The dependency order is auth <- gateway. It resolves endpoints through
+    # auth's credential machinery and must not reach for a data layer: knowing
+    # where a gateway is has nothing to do with what it serves.
+    out = run(
+        "import antlia.gateway, sys;"
+        "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
+        " and not m.startswith(('antlia.auth', 'antlia.gateway'))}))"
+    ).stdout
+    assert out.strip() == "[]"
+
+
+def test_gateway_needs_no_third_party_package():
+    # The point of this layer is that it works when the broker's SDK cannot
+    # connect -- so it must not need that SDK, or anything else, installed.
+    out = run(
+        "import sys;"
+        "before = set(sys.modules);"
+        "import antlia.gateway;"
+        "from antlia import gateway;"
+        "gateway.describe('ibkr', 'live');"
+        "added = set(sys.modules) - before;"
+        "std = sys.stdlib_module_names;"
+        "print(sorted({m.split('.')[0] for m in added "
+        "if not m.startswith('_') and m.split('.')[0] not in std "
+        "and not m.startswith('antlia')}))"
+    ).stdout
+    assert out.strip() == "[]"
+
+
+def test_describing_a_gateway_never_opens_a_broker_session():
+    # A gateway is described precisely when the broker connection is in doubt.
+    # If describing it authenticated, the diagnostic would fail exactly when it
+    # is needed.
+    out = run(
+        "import antlia.auth.pool as pool;"
+        "from antlia import gateway;"
+        "gateway.describe('ibkr', 'live');"
+        "gateway.describe('trading212', 'live');"
+        "print(pool.open_sessions())"
+    ).stdout
+    assert out.strip() == "[]"
