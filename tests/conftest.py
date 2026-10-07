@@ -5,6 +5,7 @@ import pytest
 from antlia.auth import pool, ratelimit, registry
 from antlia.gateway import registry as gateway_registry
 from antlia.history import registry as history_registry
+from antlia.live import registry as live_registry
 from antlia.live.fx import registry as fx_registry
 
 
@@ -29,6 +30,7 @@ def isolated_state(tmp_path, monkeypatch):
     fx_registry.reset()
     gateway_registry.reset()
     history_registry.reset()
+    live_registry.reset()
     ratelimit.reset()
     yield
     pool.close_all()
@@ -36,6 +38,7 @@ def isolated_state(tmp_path, monkeypatch):
     fx_registry.reset()
     gateway_registry.reset()
     history_registry.reset()
+    live_registry.reset()
     ratelimit.reset()
 
 

@@ -102,3 +102,39 @@ class Dataset:
         request if the vendor did not send it back.
         """
         return IDENTITY[self.asset][0].name
+
+
+#: Prices and sizes as a quote carries them. A missing quote is NULL, never 0
+#: or a vendor's sentinel (-1, 1.797e308) -- the projection's job.
+_QUOTE: tuple[Column, ...] = (
+    Column("bid", "DOUBLE"),
+    Column("bid_size", "DOUBLE"),
+    Column("ask", "DOUBLE"),
+    Column("ask_size", "DOUBLE"),
+    Column("last", "DOUBLE"),
+    Column("volume", "DOUBLE", "contracts traded so far in the session"),
+)
+
+#: An option chain as one source quoted it at one moment. Shared by both
+#: access modes: `live.option_chain()` returns it, and `history.record()` keeps
+#: it, so a snapshot read back months later has exactly the columns it had
+#: when it was taken.
+OPTION_QUOTE = Dataset(
+    name="option_quote",
+    asset=Asset.OPTION,
+    key=("snapshot_at", "symbol", "expiration", "strike", "right"),
+    columns=(
+        Column("date", "DATE", "the New York date of `snapshot_at`"),
+        Column("snapshot_at", "TIMESTAMP WITH TIME ZONE", "when the chain was asked for"),
+        Column("stamp", "TIMESTAMP WITH TIME ZONE", "the source's own time for this quote"),
+        *IDENTITY[Asset.OPTION],
+        *_QUOTE,
+        Column("iv", "DOUBLE", "the source's implied volatility, if it sent one"),
+        Column("delta", "DOUBLE", "the source's own greeks; NULL when it sent none"),
+        Column("gamma", "DOUBLE"),
+        Column("vega", "DOUBLE"),
+        Column("theta", "DOUBLE"),
+        Column("underlying_price", "DOUBLE", "what the source priced the greeks against"),
+    ),
+    doc="One row per contract per snapshot: the quote and any vendor greeks.",
+)

@@ -1,9 +1,11 @@
 """The write path, its dry run, and the store's own health check.
 
-**Everything that reaches `raw/` goes through `fill`.** That is the rule
-CLAUDE.md calls *several read surfaces, exactly one write path*, and giving it
-its own module is the cheapest way to keep it true: a read that wants to fill
-its own gaps calls in here rather than growing a writer of its own.
+**Everything that reaches `raw/` comes through here**, by one of two doors:
+`fill` for what a vendor is asked for, `record` for a live answer already in
+hand. Both end in the same `store.write`, so there is still exactly one
+writer -- the rule CLAUDE.md calls *several read surfaces, one write path*. A
+read that wants to fill its own gaps calls in here rather than growing a
+writer of its own.
 
 `plan` is `fill` without the spending, and `check` is the store's account of
 itself -- integrity, never quality.
@@ -18,7 +20,9 @@ from typing import Any
 from antlia.history import ingest, integrity, listing, registry
 from antlia.history import store as storage
 from antlia.history.ingest import Plan, Report
-from antlia.history.types import table as spec_for
+from antlia.history.types import RECORDED
+from antlia.history.types import fetched as spec_for
+from antlia.history.types import table as any_spec
 from antlia.history.types import window as window_for
 
 
@@ -57,6 +61,7 @@ def fill(
     can never have a second version and `latest=`/`as_of=` have nothing to
     choose between.
     """
+    spec = spec_for(table_name)
     base, src = registry.bind(source, store, table_name)
     # Warming the listing is part of the fill, so every later read of this
     # store -- and every `coverage()` -- can plan offline.
@@ -64,7 +69,7 @@ def fill(
     return ingest.run(
         base,
         src,
-        spec_for(table_name),
+        spec,
         symbol,
         window_for(start, end),
         limit=limit,
@@ -93,17 +98,42 @@ def plan(
     call -- which is then cached, and never paid for again. None of the
     requests it describes are made.
     """
+    spec = spec_for(table_name)
     base, src = registry.bind(source, store, table_name)
     scoped = listing.planned(table_name, symbol, options, source=source, store=store, fetch=None)
     return ingest.plan(
         base,
         src,
-        spec_for(table_name),
+        spec,
         symbol,
         window_for(start, end),
         refresh=refresh,
         **(scoped or {}),
     )
+
+
+def record(snapshot: Any, *, store: str | Path | None = None) -> int:
+    """Keep a live answer. Returns the rows appended.
+
+    `snapshot` is what a `live` read returned (an `antlia.live.Snapshot`). Its
+    **raw** frame is what lands in `raw/`, vendor-native like every other
+    append, and the snapshot's own source is the one whose projection reads it
+    back -- so `history.option_quotes()` later returns exactly the rows
+    `snapshot.table` held now.
+
+    No ledger entry: a recording is a sample of one moment, and there is no
+    complete set of moments for `coverage()` to measure against.
+    """
+    spec = any_spec(snapshot.dataset)
+    if spec.name not in RECORDED:
+        raise ValueError(f"{spec.name} is fetched, not recorded; use fill()")
+    if snapshot.raw is None or snapshot.raw.num_rows == 0:
+        return 0
+    base, src = registry.bind(snapshot.source, store, spec.name)
+    if spec.name not in src.tables:
+        raise ValueError(f"history source {src.name!r} does not keep {spec.name}")
+    date_expression = src.projection(spec.name).get("date")
+    return storage.write(base, src.name, spec, snapshot.raw, date_expression)
 
 
 def check(
@@ -127,4 +157,4 @@ def check(
     return found
 
 
-__all__ = ["check", "fill", "plan"]
+__all__ = ["check", "fill", "plan", "record"]

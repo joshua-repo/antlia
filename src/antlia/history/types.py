@@ -41,12 +41,13 @@ is what lets a backtest ask what a source said about date D *as of* time T.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from antlia.schema import IDENTITY, Asset, Column, Dataset
+from antlia.schema import IDENTITY, OPTION_QUOTE, Asset, Column, Dataset
 
 #: How a read hands data back. `arrow` is what DuckDB produces and costs
 #: nothing; the other two import a dataframe library only when asked for.
@@ -141,19 +142,43 @@ RATE_DAILY = Dataset(
     provenance=PROVENANCE,
 )
 
+#: Live option snapshots, kept. Same columns as `live.option_chain()` returns,
+#: plus provenance -- a recording is a live answer frozen, nothing more.
+OPTION_QUOTE_RECORDED = dataclasses.replace(OPTION_QUOTE, provenance=PROVENANCE)
+
 TABLES: dict[str, TableSpec] = {
-    t.name: t for t in (EQUITY_EOD, OPTION_EOD, EXPIRATIONS, RATE_DAILY)
+    t.name: t for t in (EQUITY_EOD, OPTION_EOD, EXPIRATIONS, RATE_DAILY, OPTION_QUOTE_RECORDED)
 }
 
 #: Tables laid out one directory per session date. `expirations` is not one of
 #: them: it is a listing about a symbol, not an observation about a day.
-DATED: frozenset[str] = frozenset({"equity_eod", "option_eod", "rate_daily"})
+DATED: frozenset[str] = frozenset({"equity_eod", "option_eod", "rate_daily", "option_quote"})
+
+#: Tables filled by `history.record()` from a live answer, never fetched. They
+#: have no plan and no ledger: a snapshot is a sample of a moment, and there
+#: is no "complete" set of moments for `coverage()` to measure against.
+RECORDED: frozenset[str] = frozenset({"option_quote"})
 
 
 def table(name: str) -> TableSpec:
     if name not in TABLES:
         raise KeyError(f"unknown table {name!r}; known: {', '.join(sorted(TABLES))}")
     return TABLES[name]
+
+
+def fetched(name: str) -> TableSpec:
+    """`table(name)`, refusing a recorded table where only a fetched one makes sense.
+
+    `fill`, `plan` and `coverage` are about what a vendor can be asked for. A
+    recorded table has no plan, so each would answer "nothing to do" -- which
+    `coverage()` would report as complete. Refusing is the honest answer.
+    """
+    if name in RECORDED:
+        raise ValueError(
+            f"{name} is recorded, not fetched: it has no plan, fill or coverage. "
+            "Take a live snapshot and pass it to history.record()."
+        )
+    return table(name)
 
 
 @dataclass(frozen=True, slots=True)

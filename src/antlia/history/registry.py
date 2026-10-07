@@ -29,6 +29,7 @@ from antlia.history.store import root
 _BUILTIN: dict[str, str] = {
     "thetadata": "antlia.history.sources.thetadata:ThetaDataHistory",
     "fred": "antlia.history.sources.fred:FredHistory",
+    "ibkr": "antlia.history.sources.recorded:IBKR",
 }
 
 _paths: dict[str, str] = dict(_BUILTIN)

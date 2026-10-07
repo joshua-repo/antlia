@@ -19,7 +19,7 @@ from typing import Any
 from antlia.history import ingest, ledger, listing, registry
 from antlia.history import store as storage
 from antlia.history.errors import NotCovered
-from antlia.history.types import LISTED, Coverage, Frame, Window, as_date, merge
+from antlia.history.types import LISTED, Coverage, Frame, Window, as_date, fetched, merge
 from antlia.history.types import table as spec_for
 from antlia.history.types import window as window_for
 from antlia.schema import CALL, PUT
@@ -286,6 +286,43 @@ def option_eod(
     )
 
 
+def option_quotes(
+    symbol: str | Sequence[str],
+    start: str | dt.date,
+    end: str | dt.date,
+    *,
+    source: str | None = None,
+    frame: Frame = "arrow",
+    store: str | Path | None = None,
+    latest: bool = True,
+    as_of: dt.datetime | None = None,
+) -> Any:
+    """Recorded option snapshots, one row per contract per snapshot.
+
+    Only what `history.record()` kept: nothing is fetched, ever, and a day
+    with no recording is simply absent. Group by `snapshot_at` to take one
+    snapshot at a time. The columns are `antlia.schema.OPTION_QUOTE`'s, the
+    same as the live read that produced them.
+    """
+    base, src = registry.bind(source, store, "option_quote")
+    spec = spec_for("option_quote")
+    span = window_for(start, end)
+    predicate, names = _match(symbol, spec.subject)
+    data = storage.read(
+        base,
+        src.name,
+        spec,
+        src.projection(spec.name),
+        start=span.start,
+        end=span.end,
+        where=[predicate],
+        params=names,
+        latest=latest,
+        as_of=as_of,
+    )
+    return _as_frame(data, frame)
+
+
 def coverage(
     table_name: str,
     symbol: str,
@@ -313,8 +350,8 @@ def coverage(
     in an expiration the listing never knew about is not a gap this function
     could have found.
     """
+    spec = fetched(table_name)
     base, src = registry.bind(source, store, table_name)
-    spec = spec_for(table_name)
 
     held = ledger.windows(base, src.name, spec.name, symbol)
     refused = ledger.denied(base, src.name, spec.name, symbol)
@@ -397,6 +434,7 @@ __all__ = [
     "equity_eod",
     "ingests",
     "option_eod",
+    "option_quotes",
     "rate_daily",
     "symbols",
 ]

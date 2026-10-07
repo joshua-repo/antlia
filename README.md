@@ -19,7 +19,7 @@ history row for the same instrument carry the same identity columns
 | asset class | `history` | `live` |
 |---|---|---|
 | eq | `equity_eod` (ThetaData) | — |
-| option | `option_eod`, `expirations` (ThetaData) | — |
+| option | `option_eod`, `expirations` (ThetaData); `option_quote` (recorded) | `live.option_chain()` (IBKR) |
 | fx | — | `live.fx` (Yahoo, then the ECB fixing) |
 | rate | `rate_daily` (FRED) | — |
 
@@ -281,6 +281,37 @@ table.inverse("JPY")  # 0.006248 -- the market
 
 Comparing across orientations instead is wrong by a factor of 25,000 and looks
 plausible in neither direction, which is why the accessor exists at all.
+
+## `antlia.live.option_chain`
+
+A slice of an option chain, quoted now, from the broker's gateway.
+
+```python
+from antlia import history, live
+
+snap = live.option_chain("AAPL", min_dte=25, max_dte=50, strikes=(180, 230), rights="P")
+snap.table            # antlia.schema.OPTION_QUOTE columns, one row per contract
+snap.received_at      # when the answer arrived; each row's `stamp` is the quote's own time
+history.record(snap)  # keep it -- reading never stores anything
+history.option_quotes("AAPL", "2026-10-01", "2026-10-31")  # every recording, read back
+```
+
+The rows carry the same identity columns as `history.option_eod`
+(`symbol, expiration, strike, right`), so today's snapshot joins onto
+yesterday's history directly.
+
+- **Narrow it.** Each contract is a market-data request, and the broker caps how
+  many are open at once. Without `strikes=` the band is +/-15% around a
+  *delayed* underlying price; more than 400 contracts is refused as a scan.
+- **A missing quote is NULL.** IBKR's `-1` ("no quote") and `1.797e308`
+  ("unset") never reach the canonical table. The raw frame keeps them, under
+  IBKR's own field names, and that raw frame is what `record()` stores.
+- **Greeks are the broker's or nothing.** The columns are filled from IBKR's
+  model greeks when it sends them; an account without a realtime feed for the
+  underlying gets NULLs, never a number antlia computed.
+- **A recording is a sample, not a series.** `option_quote` has no `fill`, no
+  `plan` and no `coverage()` -- there is no complete set of moments to measure
+  against -- and each snapshot is told apart by `snapshot_at`.
 
 ## `antlia.history`
 
