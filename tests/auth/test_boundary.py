@@ -69,12 +69,27 @@ def test_importing_fx_pulls_in_no_vendor_sdk():
 
 
 def test_history_imports_auth_and_nothing_else_from_antlia():
-    # The dependency order is auth <- history. history must not reach for
-    # fx: it is a read surface of its own, not a composition.
+    # The dependency order is auth, schema <- history. history must not reach
+    # for fx or live: it is a read surface of its own, not a composition.
     out = run(
         "import antlia.history, sys;"
         "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
-        " and not m.startswith(('antlia.auth', 'antlia.history'))}))"
+        " and not m.startswith(('antlia.auth', 'antlia.history', 'antlia.schema'))}))"
+    ).stdout
+    assert out.strip() == "[]"
+
+
+def test_schema_is_declarations_alone():
+    # Every layer reads the schema, so it may import nothing from antlia and
+    # nothing outside the standard library -- or it becomes everyone's cost.
+    out = run(
+        "import sys;"
+        "before = set(sys.modules);"
+        "import antlia.schema;"
+        "added = set(sys.modules) - before;"
+        "std = sys.stdlib_module_names;"
+        "print(sorted({m for m in added if m != 'antlia.schema' and not m.startswith('_')"
+        " and (m.startswith('antlia.') or m.split('.')[0] not in std)} - {'antlia'}))"
     ).stdout
     assert out.strip() == "[]"
 

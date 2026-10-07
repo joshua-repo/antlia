@@ -19,9 +19,10 @@ from typing import Any
 from antlia.history import ingest, ledger, listing, registry
 from antlia.history import store as storage
 from antlia.history.errors import NotCovered
-from antlia.history.types import CALL, LISTED, PUT, Coverage, Frame, Window, as_date, merge
+from antlia.history.types import LISTED, Coverage, Frame, Window, as_date, merge
 from antlia.history.types import table as spec_for
 from antlia.history.types import window as window_for
+from antlia.schema import CALL, PUT
 
 #: Flips the `fetch=` default for the whole process. Set it to 0/false and a
 #: read that is not covered raises instead of quietly spending requests.

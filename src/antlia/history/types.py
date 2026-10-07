@@ -46,24 +46,11 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from antlia.schema import IDENTITY, Asset, Column, Dataset
+
 #: How a read hands data back. `arrow` is what DuckDB produces and costs
 #: nothing; the other two import a dataframe library only when asked for.
 Frame = Literal["arrow", "pandas", "polars"]
-
-#: Canonical option rights. One letter, because that is what OCC symbols,
-#: IBKR and every vendor's own docs agree on once the spelling is stripped.
-CALL = "C"
-PUT = "P"
-
-
-@dataclass(frozen=True, slots=True)
-class Column:
-    """One canonical column: its name, its DuckDB type, and what it means."""
-
-    name: str
-    type: str
-    doc: str = ""
-
 
 #: Attached to every table. Not vendor data -- antlia's own bookkeeping about
 #: where a row came from and when it arrived.
@@ -76,28 +63,9 @@ PROVENANCE: tuple[Column, ...] = (
     ),
 )
 
-
-@dataclass(frozen=True, slots=True)
-class TableSpec:
-    """A canonical table: its columns, and what makes a row unique.
-
-    `key` is the natural key. It is the whole of what "the same row" means:
-    a later append with a matching key **restates** the earlier one and wins a
-    default read, rather than duplicating it.
-    """
-
-    name: str
-    key: tuple[str, ...]
-    columns: tuple[Column, ...]
-    doc: str = ""
-
-    @property
-    def all_columns(self) -> tuple[Column, ...]:
-        return (*self.columns, *PROVENANCE)
-
-    @property
-    def names(self) -> tuple[str, ...]:
-        return tuple(c.name for c in self.all_columns)
+#: The pre-split name for `schema.Dataset`, kept so nothing that imported it
+#: has to change. Every history table is a dataset with `PROVENANCE`.
+TableSpec = Dataset
 
 
 #: Shared by both EOD tables. ThetaData's EOD row is a session summary *plus*
@@ -118,39 +86,42 @@ _EOD_QUOTE: tuple[Column, ...] = (
     Column("stamp", "TIMESTAMP WITH TIME ZONE", "the vendor's own stamp for the row, tz-aware"),
 )
 
-EQUITY_EOD = TableSpec(
+EQUITY_EOD = Dataset(
     name="equity_eod",
+    asset=Asset.EQ,
     key=("date", "symbol"),
     columns=(
         Column("date", "DATE", "session date in the venue's own calendar"),
-        Column("symbol", "VARCHAR"),
+        *IDENTITY[Asset.EQ],
         *_EOD_QUOTE,
     ),
     doc="One row per symbol per session: OHLCV plus the closing NBBO.",
+    provenance=PROVENANCE,
 )
 
-OPTION_EOD = TableSpec(
+OPTION_EOD = Dataset(
     name="option_eod",
+    asset=Asset.OPTION,
     key=("date", "symbol", "expiration", "strike", "right"),
     columns=(
         Column("date", "DATE", "session date"),
-        Column("symbol", "VARCHAR", "underlying root, not a contract symbol"),
-        Column("expiration", "DATE"),
-        Column("strike", "DOUBLE", "in dollars, never thousandths"),
-        Column("right", "VARCHAR", "'C' or 'P'"),
+        *IDENTITY[Asset.OPTION],
         *_EOD_QUOTE,
     ),
     doc="One row per contract per session: OHLCV plus the closing NBBO.",
+    provenance=PROVENANCE,
 )
 
-EXPIRATIONS = TableSpec(
+EXPIRATIONS = Dataset(
     name="expirations",
+    asset=Asset.OPTION,
     key=("symbol", "expiration"),
     columns=(
         Column("symbol", "VARCHAR"),
         Column("expiration", "DATE"),
     ),
     doc="Every expiration a source has ever listed for a symbol.",
+    provenance=PROVENANCE,
 )
 
 TABLES: dict[str, TableSpec] = {t.name: t for t in (EQUITY_EOD, OPTION_EOD, EXPIRATIONS)}
