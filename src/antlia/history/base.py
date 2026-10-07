@@ -4,10 +4,11 @@ Everything above this file is vendor-agnostic: the store layout, the coverage
 ledger, the incremental fetch plan, the canonical read. A source supplies four
 things and nothing else:
 
-1. **What it can serve** -- `tables`, and `earliest()`, the oldest date the
-   plan is entitled to. A metered key has a horizon; asking past it is not a
-   retryable failure and the planner needs to know where it is *before* it
-   spends a request finding out.
+1. **What it can serve** -- `tables`; `earliest()`, the oldest date the
+   plan is entitled to; and `latest()`, the newest session it has published.
+   A metered key has a horizon; asking past it is not a retryable failure,
+   and the planner needs to know where it is *before* it spends a request
+   finding out.
 2. **How work divides** -- `scopes()`. An equity table is one unit of work per
    symbol; an option table is one per expiration, because that is the shape of
    every options API. A scope may carry its own bound: an expiration that
@@ -92,6 +93,21 @@ class HistorySource(abc.ABC):
         Returned rather than stored because it is a property of the *plan*,
         not of the vendor: it moves when a subscription changes, and on a
         rolling window it moves every day.
+        """
+        return None
+
+    def latest(self, table: str) -> dt.date | None:
+        """Newest session this source has published, or None for no lag.
+
+        The other end of `earliest()`, and just as much a fact the planner must
+        know before it spends a request. A vendor asked about a session it has
+        not summarised yet answers for the rest of the window and says nothing
+        about that day -- and the ledger records the *requested* window as
+        settled, so without this bound a fill run before the close marks
+        today covered and never asks for it again.
+
+        Per table, because a listing has no publication lag: what expires is
+        known today, while today's closing quote is not.
         """
         return None
 

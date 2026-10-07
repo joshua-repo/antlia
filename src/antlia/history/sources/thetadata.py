@@ -19,7 +19,7 @@ So this adapter serves EOD and only EOD. That is not a simplification: it is
 the entire free entitlement, and a table this source cannot fill is better
 absent than half-populated.
 
-## Four vendor facts the planner is built around
+## Five vendor facts the planner is built around
 
 - **There is a history horizon, and crossing it fails the whole request.**
   A FREE plan reached back to **2023-07-10** when measured on 2026-08-30 (1147
@@ -27,6 +27,13 @@ absent than half-populated.
   the boundary does not get trimmed to what you may read -- it fails outright
   with PERMISSION_DENIED. So `earliest()` clamps before dispatch, and the
   refusal is still handled, because the boundary rolls and a constant cannot.
+- **Today's EOD row does not exist until after the close.** Asked before
+  then, the vendor answers for the rest of the window and says nothing about
+  today -- and the ledger would settle today for good. `latest()` bounds the
+  plan at `PUBLISHED_AT` New York time. The closing quote is *stamped*
+  17:15-17:18; when the row becomes *readable* has not been measured, so the
+  bound carries a margin. Too late is harmless (today waits for the next
+  fill); too early brings the bug back for the minutes in between.
 - **365 calendar days per request, inclusive.** 365 works, 366 is
   `INVALID_ARGUMENT: Too many days between start and end date`. Hence
   `max_span_days`.
@@ -56,6 +63,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from antlia import auth
 from antlia.history.base import HistorySource, Scope, arrow, context
@@ -85,6 +93,24 @@ MAX_WORKERS = 2
 VENDOR_ORIGIN = dt.date(2012, 6, 1)
 
 _NY = "America/New_York"
+
+#: When the day's EOD row is treated as published, New York time. See the
+#: module docstring: the stamp is 17:15-17:18, availability is unmeasured.
+PUBLISHED_AT = dt.time(18, 0)
+
+
+def published_through(now: dt.datetime) -> dt.date:
+    """The newest session whose EOD row exists at `now` (tz-aware).
+
+    A weekend or holiday is returned as-is: asking for it costs one request
+    and settles as `empty`, which is true. Only a trading day before its
+    summary exists is the dangerous case, and that is the one this excludes.
+    """
+    local = now.astimezone(ZoneInfo(_NY))
+    if local.time() >= PUBLISHED_AT:
+        return local.date()
+    return local.date() - dt.timedelta(days=1)
+
 
 #: The EOD columns ThetaData returns for both stocks and options, mapped onto
 #: the canonical names. Applied by DuckDB over `raw/`, at read time.
@@ -129,6 +155,12 @@ class ThetaDataHistory(HistorySource):
         if env:
             return as_date(env)
         return MEASURED_EARLIEST
+
+    def latest(self, table: str) -> dt.date | None:
+        if table == "expirations":
+            # A listing is about the symbol now, not a session: no lag.
+            return None
+        return published_through(dt.datetime.now(dt.UTC))
 
     def measure_earliest(self, symbol: str = "AAPL") -> dt.date:
         """Binary-search the live horizon. Costs about eleven requests.

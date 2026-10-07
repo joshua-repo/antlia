@@ -55,6 +55,7 @@ class FakeHistory(HistorySource):
         blank: bool = False,
         close: float = 1.5,
         expirations: tuple[dt.date, ...] | None = None,
+        published: dt.date | None = None,
     ) -> None:
         # Passed in rather than read off a module global, so a test that needs
         # the vendor to list something new cannot leak that into the next one.
@@ -63,11 +64,19 @@ class FakeHistory(HistorySource):
         self._deny = deny
         self._blank = blank
         self._close = close
+        #: The last session the vendor has published. A public attribute so a
+        #: test can move it forward, the way the real one moves every evening.
+        self.published = published
         #: Every fetch, as `(table, symbol, window, scope)`. The assertions.
         self.calls: list[tuple[str, str, Window, str]] = []
 
     def earliest(self, table: str) -> dt.date | None:
         return self._earliest
+
+    def latest(self, table: str) -> dt.date | None:
+        # A listing is about the symbol today, not a session, so it has no
+        # publication lag -- the same split as ThetaData's.
+        return None if table == "expirations" else self.published
 
     def scopes(self, table: str, symbol: str, window: Window, **options: Any) -> list[Scope]:
         if table != "option_eod":
@@ -95,6 +104,10 @@ class FakeHistory(HistorySource):
             window.start + dt.timedelta(days=i) for i in range((window.end - window.start).days + 1)
         ]
         days = [d for d in days if d.weekday() < 5]
+        if self.published is not None:
+            # What a vendor does with a session it has not summarised yet: it
+            # answers for the rest of the window and says nothing about that day.
+            days = [d for d in days if d <= self.published]
         if not days:
             return None
         frame = pa.table(

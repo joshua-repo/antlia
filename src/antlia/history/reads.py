@@ -314,7 +314,14 @@ def coverage(
         # ever fill it -- and reporting it as complete would let a backtest run
         # over a window a third of which the source cannot serve.
         refused = merge([*refused, intent.beyond_horizon])
-    return report(requested, merge(r.window for r in intent.requests), refused)
+    missing = [r.window for r in intent.requests]
+    if intent.unpublished is not None:
+        # Not requested yet because the source has not summarised it, but
+        # still not held: before the close, a window ending today is missing
+        # today, and calling it complete is the wrong answer the bound exists
+        # to prevent.
+        missing.append(intent.unpublished)
+    return report(requested, merge(missing), refused)
 
 
 def ingests(

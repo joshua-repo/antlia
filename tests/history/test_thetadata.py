@@ -9,6 +9,7 @@ which is what `antlia-history verify` is for.
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 import pyarrow as pa
 import pytest
@@ -19,6 +20,7 @@ from antlia.history.sources.thetadata import (
     MAX_SPAN_DAYS,
     MAX_WORKERS,
     ThetaDataHistory,
+    published_through,
 )
 from antlia.history.types import OPTION_EOD, Window
 
@@ -152,6 +154,26 @@ def test_the_horizon_comes_from_the_environment_when_set(monkeypatch):
 def test_an_explicit_horizon_beats_the_environment(monkeypatch):
     monkeypatch.setenv("ANTLIA_THETADATA_EARLIEST", "2024-02-01")
     assert ThetaDataHistory(earliest=D(2025, 1, 1)).earliest("equity_eod") == D(2025, 1, 1)
+
+
+def test_today_is_not_published_until_after_the_close():
+    ny = ZoneInfo("America/New_York")
+    before = dt.datetime(2026, 10, 7, 17, 30, tzinfo=ny)
+    after = dt.datetime(2026, 10, 7, 18, 5, tzinfo=ny)
+    assert published_through(before) == D(2026, 10, 6)
+    assert published_through(after) == D(2026, 10, 7)
+
+
+def test_publication_is_judged_in_new_york_not_locally():
+    # 23:30 in London is 18:30 in New York: published. 22:30 is 17:30: not.
+    london = ZoneInfo("Europe/London")
+    assert published_through(dt.datetime(2026, 10, 7, 23, 30, tzinfo=london)) == D(2026, 10, 7)
+    assert published_through(dt.datetime(2026, 10, 7, 22, 30, tzinfo=london)) == D(2026, 10, 6)
+
+
+def test_the_expiration_listing_has_no_publication_lag():
+    assert ThetaDataHistory().latest("expirations") is None
+    assert ThetaDataHistory().latest("option_eod") is not None
 
 
 def test_scopes_drop_expirations_that_cannot_appear_in_the_window():
