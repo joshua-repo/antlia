@@ -241,6 +241,17 @@ def test_an_option_read_without_a_cached_listing_refuses_offline(fake, tmp_path)
     assert fake.calls == []
 
 
+def test_an_unpublished_session_is_missing_not_complete(tmp_path):
+    # Before the close, a window ending today must not read as complete: the
+    # planner will not ask for today yet, and that is not the same as holding it.
+    src = FakeHistory(published=D(2026, 1, 14))
+    history.register("fake", src, first=True)
+    history.equity_eod("AAPL", *JAN, store=tmp_path)
+    covered = history.coverage("equity_eod", "AAPL", *JAN, store=tmp_path)
+    assert [str(w) for w in covered.missing] == ["2026-01-15 .. 2026-01-16"]
+    assert not covered.complete
+
+
 def test_coverage_answers_from_the_store_alone(fake, tmp_path):
     # A question about what is held must not need the vendor. It did, through
     # the option planner's expiration listing, and that made `coverage()`

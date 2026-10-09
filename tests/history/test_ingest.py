@@ -36,6 +36,28 @@ def test_a_window_entirely_before_the_horizon_asks_for_nothing(tmp_path):
     assert plan.requests == () and plan.eligible is None
 
 
+def test_a_session_the_vendor_has_not_published_is_never_settled(tmp_path):
+    # Filling "up to today" before the vendor has summarised today must leave
+    # today unsettled. Recorded as covered, it would never be asked for again,
+    # and the store would be missing that session for good while `coverage()`
+    # called it complete.
+    src = FakeHistory(published=D(2026, 1, 20))
+    ingest.run(tmp_path, src, EQUITY_EOD, "AAPL", JAN)
+    src.published = D(2026, 1, 31)
+    src.calls.clear()
+    report = ingest.run(tmp_path, src, EQUITY_EOD, "AAPL", JAN)
+    assert report.calls >= 1
+    assert min(w.start for _, _, w, _ in src.calls) == D(2026, 1, 21)
+
+
+def test_the_plan_stops_at_the_last_published_session(tmp_path):
+    src = FakeHistory(published=D(2026, 1, 20))
+    plan = ingest.plan(tmp_path, src, EQUITY_EOD, "AAPL", JAN)
+    assert str(plan.unpublished) == "2026-01-21 .. 2026-01-31"
+    assert max(r.window.end for r in plan.requests) == D(2026, 1, 20)
+    assert "not yet published" in str(plan)
+
+
 def test_a_second_run_over_a_covered_window_costs_no_requests(tmp_path):
     src = FakeHistory()
     ingest.run(tmp_path, src, EQUITY_EOD, "AAPL", JAN)

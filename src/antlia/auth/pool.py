@@ -140,7 +140,7 @@ def verify(source: str, profile: str | None = None, **overrides: Any) -> str:
     Reaching for this rather than "did my first real call succeed" matters most
     where a half-open session answers without complaining. IBKR's gateway
     accepts the socket while IBC is still logging in, and
-    `account.snapshot()` against that state returns a *successful* snapshot with
+    a read against that state can *succeed* with
     no account and no positions -- indistinguishable, to a caller checking for
     an exception, from a genuinely empty portfolio. `verify()` is what turns
     that into an error, because the provider checks `managedAccounts()` rather

@@ -164,7 +164,7 @@ def _counts(base: Path, source: str | None) -> list[Problem]:
                         name,
                         spec,
                         adapter.projection(table_name),
-                        where=['"symbol" = ?'],
+                        where=[f'"{spec.subject}" = ?'],
                         params=[symbol],
                         latest=False,
                     ).num_rows

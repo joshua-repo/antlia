@@ -41,29 +41,17 @@ is what lets a backtest ask what a source said about date D *as of* time T.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from antlia.schema import IDENTITY, OPTION_QUOTE, Asset, Column, Dataset
+
 #: How a read hands data back. `arrow` is what DuckDB produces and costs
 #: nothing; the other two import a dataframe library only when asked for.
 Frame = Literal["arrow", "pandas", "polars"]
-
-#: Canonical option rights. One letter, because that is what OCC symbols,
-#: IBKR and every vendor's own docs agree on once the spelling is stripped.
-CALL = "C"
-PUT = "P"
-
-
-@dataclass(frozen=True, slots=True)
-class Column:
-    """One canonical column: its name, its DuckDB type, and what it means."""
-
-    name: str
-    type: str
-    doc: str = ""
-
 
 #: Attached to every table. Not vendor data -- antlia's own bookkeeping about
 #: where a row came from and when it arrived.
@@ -76,28 +64,9 @@ PROVENANCE: tuple[Column, ...] = (
     ),
 )
 
-
-@dataclass(frozen=True, slots=True)
-class TableSpec:
-    """A canonical table: its columns, and what makes a row unique.
-
-    `key` is the natural key. It is the whole of what "the same row" means:
-    a later append with a matching key **restates** the earlier one and wins a
-    default read, rather than duplicating it.
-    """
-
-    name: str
-    key: tuple[str, ...]
-    columns: tuple[Column, ...]
-    doc: str = ""
-
-    @property
-    def all_columns(self) -> tuple[Column, ...]:
-        return (*self.columns, *PROVENANCE)
-
-    @property
-    def names(self) -> tuple[str, ...]:
-        return tuple(c.name for c in self.all_columns)
+#: The pre-split name for `schema.Dataset`, kept so nothing that imported it
+#: has to change. Every history table is a dataset with `PROVENANCE`.
+TableSpec = Dataset
 
 
 #: Shared by both EOD tables. ThetaData's EOD row is a session summary *plus*
@@ -118,52 +87,98 @@ _EOD_QUOTE: tuple[Column, ...] = (
     Column("stamp", "TIMESTAMP WITH TIME ZONE", "the vendor's own stamp for the row, tz-aware"),
 )
 
-EQUITY_EOD = TableSpec(
+EQUITY_EOD = Dataset(
     name="equity_eod",
+    asset=Asset.EQ,
     key=("date", "symbol"),
     columns=(
         Column("date", "DATE", "session date in the venue's own calendar"),
-        Column("symbol", "VARCHAR"),
+        *IDENTITY[Asset.EQ],
         *_EOD_QUOTE,
     ),
     doc="One row per symbol per session: OHLCV plus the closing NBBO.",
+    provenance=PROVENANCE,
 )
 
-OPTION_EOD = TableSpec(
+OPTION_EOD = Dataset(
     name="option_eod",
+    asset=Asset.OPTION,
     key=("date", "symbol", "expiration", "strike", "right"),
     columns=(
         Column("date", "DATE", "session date"),
-        Column("symbol", "VARCHAR", "underlying root, not a contract symbol"),
-        Column("expiration", "DATE"),
-        Column("strike", "DOUBLE", "in dollars, never thousandths"),
-        Column("right", "VARCHAR", "'C' or 'P'"),
+        *IDENTITY[Asset.OPTION],
         *_EOD_QUOTE,
     ),
     doc="One row per contract per session: OHLCV plus the closing NBBO.",
+    provenance=PROVENANCE,
 )
 
-EXPIRATIONS = TableSpec(
+EXPIRATIONS = Dataset(
     name="expirations",
+    asset=Asset.OPTION,
     key=("symbol", "expiration"),
     columns=(
         Column("symbol", "VARCHAR"),
         Column("expiration", "DATE"),
     ),
     doc="Every expiration a source has ever listed for a symbol.",
+    provenance=PROVENANCE,
 )
 
-TABLES: dict[str, TableSpec] = {t.name: t for t in (EQUITY_EOD, OPTION_EOD, EXPIRATIONS)}
+RATE_DAILY = Dataset(
+    name="rate_daily",
+    asset=Asset.RATE,
+    key=("date", "series"),
+    columns=(
+        Column("date", "DATE", "the observation date the series assigns"),
+        *IDENTITY[Asset.RATE],
+        Column(
+            "rate",
+            "DOUBLE",
+            "annualised, as a decimal (0.0422 is 4.22%), on the series' own basis",
+        ),
+    ),
+    doc="One row per series per observation date: an interest rate.",
+    provenance=PROVENANCE,
+)
+
+#: Live option snapshots, kept. Same columns as `live.option_chain()` returns,
+#: plus provenance -- a recording is a live answer frozen, nothing more.
+OPTION_QUOTE_RECORDED = dataclasses.replace(OPTION_QUOTE, provenance=PROVENANCE)
+
+TABLES: dict[str, TableSpec] = {
+    t.name: t for t in (EQUITY_EOD, OPTION_EOD, EXPIRATIONS, RATE_DAILY, OPTION_QUOTE_RECORDED)
+}
 
 #: Tables laid out one directory per session date. `expirations` is not one of
 #: them: it is a listing about a symbol, not an observation about a day.
-DATED: frozenset[str] = frozenset({"equity_eod", "option_eod"})
+DATED: frozenset[str] = frozenset({"equity_eod", "option_eod", "rate_daily", "option_quote"})
+
+#: Tables filled by `history.record()` from a live answer, never fetched. They
+#: have no plan and no ledger: a snapshot is a sample of a moment, and there
+#: is no "complete" set of moments for `coverage()` to measure against.
+RECORDED: frozenset[str] = frozenset({"option_quote"})
 
 
 def table(name: str) -> TableSpec:
     if name not in TABLES:
         raise KeyError(f"unknown table {name!r}; known: {', '.join(sorted(TABLES))}")
     return TABLES[name]
+
+
+def fetched(name: str) -> TableSpec:
+    """`table(name)`, refusing a recorded table where only a fetched one makes sense.
+
+    `fill`, `plan` and `coverage` are about what a vendor can be asked for. A
+    recorded table has no plan, so each would answer "nothing to do" -- which
+    `coverage()` would report as complete. Refusing is the honest answer.
+    """
+    if name in RECORDED:
+        raise ValueError(
+            f"{name} is recorded, not fetched: it has no plan, fill or coverage. "
+            "Take a live snapshot and pass it to history.record()."
+        )
+    return table(name)
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,7 +1,7 @@
 # antlia
 
 The data layer. *Antlia*, the air pump, moves what is in there out to here
-without altering it — this pulls market and account data out of vendor APIs and
+without altering it — this pulls market data out of vendor APIs and
 makes it available in one shape, and resists improving anything on the way
 through.
 
@@ -9,15 +9,23 @@ It is a library. Other projects import it; it is the one place they get data
 from, so a backtest, a screen and a dashboard cannot quietly disagree about what
 happened.
 
-Five parts, of which four are built:
+Data is laid out on two axes. **Access** decides what a read promises:
+`history` is fixed (given `as_of`, the same rows forever) and cached;
+`live` is what a source says right now, stamped and never stored. **Asset
+class** decides what a row is, and is shared by both: a live row and a
+history row for the same instrument carry the same identity columns
+(`antlia.schema`).
 
-| | | |
+| asset class | `history` | `live` |
 |---|---|---|
-| `auth` | credentials, sessions, rate limits | **built** |
-| `account` | live account state, multi-source | **built** (IBKR, Trading212) |
-| `fx` | foreign exchange rates, multi-source | **built** (Yahoo, ECB) |
-| `history` | cached historical data, multi-source | **built** (ThetaData) |
-| `live` | on-demand live historical pulls | planned |
+| eq | `equity_eod` (ThetaData) | — |
+| option | `option_eod`, `expirations` (ThetaData); `option_quote` (recorded) | `live.option_chain()` (IBKR) |
+| fx | — | `live.fx` (Yahoo, then the ECB fixing) |
+| rate | `rate_daily` (FRED) | — |
+
+Beneath them, two pieces of infrastructure that return no market data:
+`auth` (credentials, sessions, rate limits) and `gateway` (where a source's
+gateway is, and how to restart it).
 
 ## `antlia.auth`
 
@@ -43,6 +51,7 @@ object (`ib_insync.IB`, `httpx.Client`, …), not a wrapper.
 
 | source | shape | profiles | extra |
 |---|---|---|---|
+| `fred` | free API key, plain HTTPS | — | none |
 | `ibkr` | socket to a running TWS / IB Gateway | `paper` (7497), `live` (7496) | `antlia[ibkr]` |
 | `thetadata` | API key, or email+password (cloud gRPC) | — | `antlia[thetadata]` |
 | `trading212` | key + secret, HTTP Basic | `live`, `demo` | `antlia[trading212]` |
@@ -181,69 +190,15 @@ class MyProvider(auth.Provider):
 auth.register("mine", MyProvider())
 ```
 
-## `antlia.account`
-
-Live account state — positions, balances, margin, working orders, fills — in one
-canonical schema whichever broker it came from.
-
-```python
-from antlia import account
-
-snap = account.snapshot("ibkr", profile="live")
-snap.margin.excess_liquidity  # headroom, in the account's base currency
-snap.margin.utilisation  # maintenance / net liquidation
-snap.balance("JPY").cash  # per-currency cash
-[p for p in snap.positions if p.instrument.kind == "option"]
-```
-
-`positions()`, `balances()`, `margin()`, `orders()`, `fills()` are views of the
-same snapshot. Authentication and the socket belong to `antlia.auth`; this layer
-only maps. It reads and only reads — reading working orders is in scope, placing
-one never is, and the IBKR session connects `readonly=True` so the broker
-enforces it.
-
-```bash
-python -m antlia.account ibkr -p live          # a readable table
-python -m antlia.account ibkr -p live --json   # the same thing, machine-readable
-```
-
-### The normalisation that matters
-
-**`average_price` and `market_price` are on the same scale.** Brokers do not
-guarantee this: IBKR reports `avgCost` *including* the contract multiplier while
-`marketPrice` excludes it, so an option bought at 2.90 arrives as `290.04`
-beside a market price of `3.50`. Comparing those two is a mistake every consumer
-would otherwise make exactly once. `Position.cost_basis` puts the multiplier
-back when you want money.
-
-Other decisions the canonical schema makes:
-
-- **A multi-currency account reports a `BASE` pseudo-currency** alongside the
-  real ones. It is a consolidated rollup — `Balance.is_consolidated` flags it,
-  and summing without excluding it double-counts.
-- **Margin is denominated in the account's base currency**, read off
-  `NetLiquidation` rather than the `Currency` tag (which appears once per
-  currency held, so picking one is a coin flip that mislabels every figure).
-- **An unreadable value is `None`, never `0.0`.** A zero `day_trades_remaining`
-  is a different and much more alarming claim than "not reported".
-- **`Instrument.ids` keeps the vendor's identifiers verbatim** (`ibkr_conid`,
-  the OCC local symbol). It deliberately does not resolve identity across
-  sources — that is an open question, and a synthetic key would bury it.
-- **`AccountSnapshot.vendor` keeps everything that did not map**, unaltered.
-  Reaching into it from a consumer means the canonical schema is missing a
-  field, which is a change to make here.
-- **Trading212 quotes some lines in a minor unit** (GBX beside GBP, in the same
-  account, with no currency in the payload). The scale is recovered from
-  `ppl = quantity * (current - average) * factor`, accepted only when it lands
-  on a power of ten, and left `None` otherwise — the same failing-closed rule as
-  IBKR's multiplier.
-
-## `antlia.fx`
+## `antlia.live.fx`
 
 Foreign exchange rates, so figures in different currencies can be added up.
+A live read: the current rate table, cached for six hours so a dashboard does
+not refetch it per render. `antlia.fx` is the same module under the name it
+shipped with.
 
 ```python
-from antlia import fx
+from antlia.live import fx
 
 table = fx.rates(("USD", "GBP", "JPY", "HKD"))
 table.convert(83289.64, "GBP", "USD")  # -> 112753.17
@@ -256,9 +211,9 @@ pivot and every conversion crosses through it, so adding a currency is a
 one-line change.
 
 ```bash
-python -m antlia.fx                             # the table, cache or live
-python -m antlia.fx --verify                    # every source, live, in turn
-python -m antlia.fx --convert 83289.64 GBP USD
+python -m antlia.live.fx                        # the table, cache or live
+python -m antlia.live.fx --verify               # every source, live, in turn
+python -m antlia.live.fx --convert 83289.64 GBP USD
 ```
 
 ### Two sources, tried in order
@@ -297,9 +252,9 @@ rates cannot be reconciled against either of them. `fx.chain()` shows the order;
   table. Degrading to "no rates" is the consumer's policy, not this layer's.
 - **A broker's rate is not an FX source.** See below.
 
-### A broker's rate stays an account concern
+### A broker's rate is not an FX source
 
-IBKR reports its own rate per currency on `Balance.exchange_rate`, live, and by
+A broker reports its own rate per currency, live, and by
 definition the one its account totals were computed with. That number is **not**
 reachable through `fx`, on purpose:
 
@@ -316,16 +271,47 @@ reachable through `fx`, on purpose:
 So: **restating a broker's own account totals uses that broker's own rate;
 combining across brokers, or converting anything that is not an account, uses
 `fx`.** To compare them, `RateTable.inverse()` is deliberately in the broker's
-orientation — units of base per 1 unit of the currency, which is what
-`Balance.exchange_rate` carries:
+orientation — units of base per 1 unit of the currency, which is how
+IBKR reports it:
 
 ```python
 table.inverse("JPY")  # 0.006248 -- the market
-snap.balance("JPY").exchange_rate  # 0.006247 -- what IBKR valued the account with
+# 0.006247 -- what IBKR valued the account with
 ```
 
 Comparing across orientations instead is wrong by a factor of 25,000 and looks
 plausible in neither direction, which is why the accessor exists at all.
+
+## `antlia.live.option_chain`
+
+A slice of an option chain, quoted now, from the broker's gateway.
+
+```python
+from antlia import history, live
+
+snap = live.option_chain("AAPL", min_dte=25, max_dte=50, strikes=(180, 230), rights="P")
+snap.table            # antlia.schema.OPTION_QUOTE columns, one row per contract
+snap.received_at      # when the answer arrived; each row's `stamp` is the quote's own time
+history.record(snap)  # keep it -- reading never stores anything
+history.option_quotes("AAPL", "2026-10-01", "2026-10-31")  # every recording, read back
+```
+
+The rows carry the same identity columns as `history.option_eod`
+(`symbol, expiration, strike, right`), so today's snapshot joins onto
+yesterday's history directly.
+
+- **Narrow it.** Each contract is a market-data request, and the broker caps how
+  many are open at once. Without `strikes=` the band is +/-15% around a
+  *delayed* underlying price; more than 400 contracts is refused as a scan.
+- **A missing quote is NULL.** IBKR's `-1` ("no quote") and `1.797e308`
+  ("unset") never reach the canonical table. The raw frame keeps them, under
+  IBKR's own field names, and that raw frame is what `record()` stores.
+- **Greeks are the broker's or nothing.** The columns are filled from IBKR's
+  model greeks when it sends them; an account without a realtime feed for the
+  underlying gets NULLs, never a number antlia computed.
+- **A recording is a sample, not a series.** `option_quote` has no `fill`, no
+  `plan` and no `coverage()` -- there is no complete set of moments to measure
+  against -- and each snapshot is told apart by `snapshot_at`.
 
 ## `antlia.history`
 
@@ -341,7 +327,13 @@ history.coverage("option_eod", "AAPL", "2026-08-10", "2026-08-28")
 
 # A read takes a universe; one frame, and the `symbol` column tells them apart.
 history.equity_eod(["AAPL", "MSFT"], "2026-08-17", "2026-08-28")
+
+# Interest rates, by antlia's series name: annualised decimals (0.0422 = 4.22%).
+history.rate_daily(["UST_3M", "SOFR"], "2026-01-01", "2026-09-30")
 ```
+
+Naming no source reaches the first one that serves the table: ThetaData for
+`equity_eod` and `option_eod`, FRED for `rate_daily`.
 
 Reads return a **`pyarrow.Table`**; `frame="pandas"` or `frame="polars"`
 converts, and imports that library only when you ask for it.
@@ -562,6 +554,27 @@ shape the planner:
   second, which is the real cost of a warm-up: about 35s for one expiration over
   a 90-day window.
 
+### Sessions are fetched only once they are published
+
+A vendor asked about a session it has not summarised yet answers for the rest
+of the window and says nothing about that day. Each source therefore declares
+`latest()`, the newest session it has published, and the plan stops there:
+ThetaData's EOD row counts as published at 18:00 New York, and a FRED rate two
+business days after the last finished business day (rates are published the
+next afternoon). A fill run before then leaves today unfetched rather than
+recording it as held, `Plan` names the span as not yet published, and
+`coverage()` counts it as missing.
+
+### FRED, for interest rates
+
+`rate_daily` comes from FRED's API, which needs a free key
+(fred.stlouisfed.org/docs/api/api_key.html) under `[fred] api_key` in
+`~/.antlia/credentials.toml`, and nothing installed beyond antlia. Series are
+named by antlia -- `UST_1M`, `UST_3M`, `UST_6M`, `UST_1Y`, `UST_2Y`, `UST_10Y`
+(Treasury constant maturity), `TBILL_3M` (discount basis), `SOFR`, `EFFR` -- and
+mapped to FRED's ids inside the adapter. `raw/` keeps FRED's observations as
+sent, `"."` for a missing value included; that reads back as NULL, not zero.
+
 ### What this data is, and is not
 
 Measured, not assumed. Read this before a backtest believes anything.
@@ -633,31 +646,158 @@ and a `{canonical column: SQL expression}` projection. The reader, the cache,
 the coverage ledger and every consumer stay exactly as they are — no consumer
 can tell which vendor answered.
 
+## `antlia.gateway`
+
+Most sources are an HTTP endpoint and a key. One is a **desktop application in
+a container**, and while it is not logged in, every layer above it is dark.
+This module is the small amount of knowledge needed to diagnose and fix that.
+
+```python
+from antlia import gateway
+
+info = gateway.describe("ibkr", "live")
+if info is None:
+    ...  # a REST API: there is nothing to look at
+else:
+    info.screen_url  # noVNC page, password already filled in
+    info.vnc_addr  # "127.0.0.1:5900", for a native viewer
+    info.control  # did IBC's command server answer just now
+
+gateway.restart("ibkr", "live")  # -> IBC's own words, verbatim
+```
+
+```bash
+python -m antlia.gateway              # every gateway, and whether it answers
+python -m antlia.gateway -s ibkr -p live --restart
+```
+
+`None` is the whole protocol for "this source has no gateway", so no consumer
+keeps its own list of which ones do. A name no registry knows raises
+`UnknownSource` instead — a typo must not read as "nothing to see here".
+
+### It cannot log a gateway in, and no version will
+
+IB Gateway has **no headless mode and no login API**. The only way in is a
+Swing dialog; the only thing that types into it is IBC; and IBC has to be
+inside the container. So there is no `TWS_PASSWORD` here and nowhere to put
+one.
+
+```
+IBC (in the container) --drives the login dialog--> IB Gateway
+                             --and only then opens--> :4001 --> antlia.auth
+```
+
+That is why the IBKR settings antlia resolves are `{host, port, client_id,
+readonly, timeout}` — endpoints, with not one secret among them. Trading212's
+`api_key`/`api_secret` look like the same kind of thing and are not: those are
+real API credentials, they belong in `auth`, and merging the two cases would
+put a broker password somewhere it has no business being.
+
+What *is* reachable from outside the container is a picture of the screen and a
+robot that will restart it, and that is exactly what this module exposes.
+
+### `restart()` is a soft restart, not a fresh login
+
+IBC implements it by setting the gateway's own auto-restart a minute ahead —
+its log says `Setting auto-restart time to 11:42 AM` — which is IBKR's
+**session-preserving** restart. It does not re-authenticate and it does **not**
+push a new two-factor notification. Documentation claiming otherwise was
+written once here and disproved by the gateway's own log.
+
+It also needs a UI that can respond: behind a modal dialog, IBC sits on
+`Waiting for config dialog future to complete` indefinitely, and the call times
+out. The two failures are distinguished in the message, because a refusal means
+the command server was never switched on and a timeout means it was.
+
+Errors are prose for a person. `ControlUnavailable` subclasses
+`ConnectionFailed`, so `except ConnectionFailed` still covers it; branch on
+whether it raised, never on the words, and show the words to the reader.
+
+### The command server being off is a normal answer
+
+IBC ships `CommandServerPort=0`, so most gateways have no control channel and
+`control=False` is what a correct, healthy, unmodified deployment looks like.
+`describe()` returns it as a field rather than raising.
+
+`control` is probed on every call, because it is a claim about *right now* and
+a stale "yes" sends someone to a button that cannot work. The screen is
+deliberately not probed: the browser is the better detector, and waiting on a
+second socket doubles the latency of an answer nobody acts on.
+
+### The VNC password is filled into the URL, and must not be persisted
+
+noVNC 1.4 reads `password` from the query string and, with `autoconnect=1`,
+then never draws its credential dialog. That is worth doing for a reason that
+has nothing to do with saving a keystroke: the dialog is an ordinary
+`<input type="password">` in an ordinary web page, so password managers and
+keyboard extensions fight the user for it — inside an iframe as much as
+outside, since extensions inject into every frame. Prefilling removes the field
+rather than winning the fight.
+
+This is the one secret the layer holds, and it protects a view of a screen, not
+an account. The cost is a secret living in a string that looks like
+configuration, so the redaction is built into the type rather than left to each
+caller:
+
+```python
+info.screen_url  # carries the password — hand it to a browser, keep no copy
+info.safe_screen_url  # the same link, asking for it — safe to log or save
+repr(info)  # redacted
+info.redacted()  # redacted
+```
+
+It resolves from `[ibkr] vnc_password`, `$ANTLIA_IBKR_LIVE_VNC_PASSWORD`, and
+finally the plain `$VNC_SERVER_PASSWORD` — the gateway compose project's own
+spelling, so `set -a; . ~/ib-gateway/.env; set +a` is enough to supply it.
+Nothing here reads that project's files; the variable is the whole contract.
+
+### Configuration, and the host side of those ports
+
+Settings live in the source's own section, beside the ones `auth` already
+resolves from there — one broker, one place:
+
+```toml
+[ibkr]
+host = "127.0.0.1"     # the same field auth reads, so a remote gateway is one edit
+control_port = 7462    # IBC's command server; 0 means "not published"
+
+[ibkr.live]
+screen_port = 6080     # the noVNC bridge
+vnc_port = 5900        # the VNC server itself
+```
+
+Any port set to `0` means not published, and that field comes back `None`
+rather than pointing at something that is not there.
+
+The compose override that publishes those ports, the vendored IBC template that
+switches the command server on, and the traps involved in both, are in
+[`ops/ib-gateway/`](ops/ib-gateway/) with their own README. Nothing in there is
+a secret; the credentials stay in the gateway project's own `.env`, outside any
+repository.
+
+**No extras and no vendor SDK.** Like `auth`, this runs on the standard library
+— which is the point, because a gateway is asked about precisely when the
+broker's own connection is in doubt.
+
 ## Using antlia from another project
 
 ```bash
-uv add "antlia[ibkr,trading212,store,thetadata] @ /path/to/antlia"   # or a git URL
+uv add "antlia[store,thetadata] @ /path/to/antlia"   # or a git URL
 ```
 
 Then, from anywhere — credentials live in `~/.antlia/`, so nothing depends on
 the working directory:
 
 ```python
-from antlia import account
+from antlia import history
 
-legs = [
-    p for p in account.snapshot("ibkr", profile="live").positions if p.instrument.kind == "option"
-]
+bars = history.equity_eod("AAPL", "2026-08-17", "2026-08-28", frame="pandas")
 ```
 
-Four things to know before wiring it in:
+Three things to know before wiring it in:
 
 - **Python >=3.12**, and ask for the extras you use. A plain `pip install
   antlia` gives you credential resolution and no vendor SDKs at all.
-- **Take one `snapshot()` and read from it.** `positions()`, `balances()`,
-  `margin()`, `orders()` and `fills()` are each a *full* snapshot underneath —
-  four HTTP calls for Trading212 — so calling several in a row multiplies the
-  requests and will meet a rate limit that a single snapshot never does.
 - **Rate limiting is per process.** The token buckets live in memory, so two
   processes hitting the same account share nothing and can collide. Trading212
   requests retry once at the reset the vendor names; beyond that, one long-lived
@@ -673,6 +813,9 @@ Four things to know before wiring it in:
   whichever vendor fills it (`antlia[store,thetadata]`). Reading a warmed store
   needs no vendor extra at all — a machine that only runs backtests never has to
   install the SDK.
+- **`gateway` needs no extra either**, deliberately: it answers "is the gateway
+  up, and how do I look at it" without `ib_insync` installed, which is the state
+  you are most likely to be in when you need to ask.
 
 ## Development
 

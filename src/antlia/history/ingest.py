@@ -7,9 +7,12 @@ keeps a latency-sensitive read from ever touching a Parquet writer.
 The plan is built before a single request goes out, which matters more on a
 metered plan than it does anywhere else:
 
-1. **Clamp to the entitlement horizon.** ThetaData fails a request whose range
+1. **Clamp to the entitlement horizon** at the old end, and to the last
+   published session at the new one. ThetaData fails a request whose range
    *straddles* its plan boundary -- it does not trim to what you may read -- so
    a window reaching too far back would cost the whole fetch, not part of it.
+   A window reaching past the last published session costs nothing, which is
+   worse: the ledger would settle a day the vendor has not summarised yet.
 2. **Subtract what the ledger already settles.** Both rows fetched and days
    proven empty. A covered window costs zero requests and never authenticates.
 3. **Subtract what the source has already refused.** A permanent refusal
@@ -80,6 +83,9 @@ class Plan:
     requests: tuple[Request, ...]
     #: Dropped because the horizon excludes it. Never requested.
     beyond_horizon: Window | None = None
+    #: Dropped because the source has not published it yet. Never requested,
+    #: and still missing: a later fill picks it up.
+    unpublished: Window | None = None
 
     @property
     def calls(self) -> int:
@@ -89,7 +95,9 @@ class Plan:
         head = f"{self.symbol} {self.table} via {self.source}: {self.calls} requests"
         if self.beyond_horizon:
             head += f"; {self.beyond_horizon} is before the plan's horizon"
-        if not self.requests:
+        if self.unpublished:
+            head += f"; {self.unpublished} is not yet published"
+        if not self.requests and not self.unpublished:
             head += " (already covered)"
         return head
 
@@ -143,13 +151,16 @@ def plan(
     exactly when you would ask again.
     """
     horizon = src.earliest(spec.name)
-    eligible = window.clamp(start=horizon) if horizon else window
-    beyond = None
+    last = src.latest(spec.name)
+    eligible = window.clamp(start=horizon, end=last)
+    beyond = unpublished = None
     if horizon and window.start < horizon:
         beyond = Window(window.start, min(window.end, horizon - dt.timedelta(days=1)))
+    if last and window.end > last:
+        unpublished = Window(max(window.start, last + dt.timedelta(days=1)), window.end)
 
     if eligible is None:
-        return Plan(spec.name, symbol, src.name, window, None, (), beyond)
+        return Plan(spec.name, symbol, src.name, window, None, (), beyond, unpublished)
 
     requests: list[Request] = []
     for scope in src.scopes(spec.name, symbol, eligible, **options):
@@ -167,7 +178,7 @@ def plan(
             for chunk in gap.chunks(cap) if cap else [gap]:
                 requests.append(Request(scope, chunk))
 
-    return Plan(spec.name, symbol, src.name, window, eligible, tuple(requests), beyond)
+    return Plan(spec.name, symbol, src.name, window, eligible, tuple(requests), beyond, unpublished)
 
 
 def concurrency(src: HistorySource, workers: int) -> int:

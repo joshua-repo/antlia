@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
 
 def run(code: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
@@ -45,59 +47,57 @@ def test_auth_needs_no_third_party_package():
     assert out.strip() == "[]"
 
 
-def test_account_imports_auth_and_nothing_else_from_antlia():
-    # The dependency order is auth <- account. If account ever reaches for
-    # history, the "three read surfaces, one write path" rule has been broken.
+def test_live_imports_auth_and_nothing_else_from_antlia():
+    # The dependency order is auth, schema <- live. live must not reach for
+    # history: recording a live answer is history's write path calling in,
+    # never live reaching out.
     out = run(
-        "import antlia.account, sys;"
+        "import antlia.live, sys;"
         "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
-        " and not m.startswith(('antlia.auth', 'antlia.account'))}))"
+        " and not m.startswith(('antlia.auth', 'antlia.live', 'antlia.schema'))}))"
     ).stdout
     assert out.strip() == "[]"
 
 
-def test_importing_account_pulls_in_no_broker_sdk():
-    out = run(
-        "import sys;"
-        "before = set(sys.modules);"
-        "import antlia.account;"
-        "added = {m.split('.')[0] for m in set(sys.modules) - before};"
-        "print(sorted(added & {'ib_insync', 'thetadata', 'yfinance', 'httpx'}))"
-    ).stdout
-    assert out.strip() == "[]"
-
-
-def test_fx_imports_auth_and_nothing_else_from_antlia():
-    # The dependency order is auth <- fx. fx must not reach for account (a
-    # broker's rate is deliberately not an FX source) nor for history.
-    out = run(
-        "import antlia.fx, sys;"
-        "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
-        " and not m.startswith(('antlia.auth', 'antlia.fx'))}))"
-    ).stdout
-    assert out.strip() == "[]"
-
-
-def test_importing_fx_pulls_in_no_vendor_sdk():
+@pytest.mark.parametrize("module", ["antlia.live", "antlia.live.fx", "antlia.fx"])
+def test_importing_live_pulls_in_no_vendor_sdk_and_no_engine(module):
     # The whole chain is lazy: the frankfurter fallback runs on the stdlib
-    # alone, so `antlia[yfinance]` is a preference, not an install cost.
+    # alone, so `antlia[yfinance]` is a preference, not an install cost, and
+    # the query engine and ib_insync arrive only with the read that needs
+    # them. The old `antlia.fx` name is held to the same rule.
     out = run(
         "import sys;"
         "before = set(sys.modules);"
-        "import antlia.fx;"
+        f"import {module};"
         "added = {m.split('.')[0] for m in set(sys.modules) - before};"
-        "print(sorted(added & {'ib_insync', 'thetadata', 'yfinance', 'httpx', 'pandas'}))"
+        "print(sorted(added & {'ib_insync', 'thetadata', 'yfinance', 'httpx', 'pandas',"
+        " 'duckdb', 'pyarrow'}))"
     ).stdout
     assert out.strip() == "[]"
 
 
 def test_history_imports_auth_and_nothing_else_from_antlia():
-    # The dependency order is auth <- history. history must not reach for
-    # account or fx: it is a read surface of its own, not a composition.
+    # The dependency order is auth, schema <- history. history must not reach
+    # for live: it is a read surface of its own, not a composition.
     out = run(
         "import antlia.history, sys;"
         "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
-        " and not m.startswith(('antlia.auth', 'antlia.history'))}))"
+        " and not m.startswith(('antlia.auth', 'antlia.history', 'antlia.schema'))}))"
+    ).stdout
+    assert out.strip() == "[]"
+
+
+def test_schema_is_declarations_alone():
+    # Every layer reads the schema, so it may import nothing from antlia and
+    # nothing outside the standard library -- or it becomes everyone's cost.
+    out = run(
+        "import sys;"
+        "before = set(sys.modules);"
+        "import antlia.schema;"
+        "added = set(sys.modules) - before;"
+        "std = sys.stdlib_module_names;"
+        "print(sorted({m for m in added if m != 'antlia.schema' and not m.startswith('_')"
+        " and (m.startswith('antlia.') or m.split('.')[0] not in std)} - {'antlia'}))"
     ).stdout
     assert out.strip() == "[]"
 
@@ -134,3 +134,47 @@ def test_a_history_read_of_a_covered_window_never_authenticates():
         "print(src.calls, pool.open_sessions())"
     ).stdout
     assert out.strip() == "[] []"
+
+
+def test_gateway_imports_auth_and_nothing_else_from_antlia():
+    # The dependency order is auth <- gateway. It resolves endpoints through
+    # auth's credential machinery and must not reach for a data layer: knowing
+    # where a gateway is has nothing to do with what it serves.
+    out = run(
+        "import antlia.gateway, sys;"
+        "print(sorted({m for m in sys.modules if m.startswith('antlia.')"
+        " and not m.startswith(('antlia.auth', 'antlia.gateway'))}))"
+    ).stdout
+    assert out.strip() == "[]"
+
+
+def test_gateway_needs_no_third_party_package():
+    # The point of this layer is that it works when the broker's SDK cannot
+    # connect -- so it must not need that SDK, or anything else, installed.
+    out = run(
+        "import sys;"
+        "before = set(sys.modules);"
+        "import antlia.gateway;"
+        "from antlia import gateway;"
+        "gateway.describe('ibkr', 'live');"
+        "added = set(sys.modules) - before;"
+        "std = sys.stdlib_module_names;"
+        "print(sorted({m.split('.')[0] for m in added "
+        "if not m.startswith('_') and m.split('.')[0] not in std "
+        "and not m.startswith('antlia')}))"
+    ).stdout
+    assert out.strip() == "[]"
+
+
+def test_describing_a_gateway_never_opens_a_broker_session():
+    # A gateway is described precisely when the broker connection is in doubt.
+    # If describing it authenticated, the diagnostic would fail exactly when it
+    # is needed.
+    out = run(
+        "import antlia.auth.pool as pool;"
+        "from antlia import gateway;"
+        "gateway.describe('ibkr', 'live');"
+        "gateway.describe('trading212', 'live');"
+        "print(pool.open_sessions())"
+    ).stdout
+    assert out.strip() == "[]"

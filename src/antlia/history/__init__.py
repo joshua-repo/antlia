@@ -53,6 +53,8 @@ from antlia.history.reads import (
     equity_eod,
     ingests,
     option_eod,
+    option_quotes,
+    rate_daily,
     symbols,
 )
 from antlia.history.registry import chain, register, source, unregister
@@ -61,8 +63,9 @@ from antlia.history.registry import chain, register, source, unregister
 # the implementation's. Renamed here rather than wrapped, because a wrapper
 # would be logic and this file holds none.
 from antlia.history.store import root as path
-from antlia.history.types import CALL, PUT, Coverage, TableSpec, Window, window
-from antlia.history.writes import check, fill, plan
+from antlia.history.types import Coverage, TableSpec, Window, window
+from antlia.history.writes import check, fill, plan, record
+from antlia.schema import CALL, PUT
 
 __all__ = [
     "CALL",
@@ -88,8 +91,11 @@ __all__ = [
     "fill",
     "ingests",
     "option_eod",
+    "option_quotes",
     "path",
     "plan",
+    "rate_daily",
+    "record",
     "register",
     "source",
     "symbols",

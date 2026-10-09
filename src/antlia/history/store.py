@@ -353,7 +353,7 @@ def ingests(
         where = ""
         params: list[Any] = [pattern]
         if symbol is not None:
-            where = " WHERE symbol = ?"
+            where = f' WHERE "{spec.subject}" = ?'
             params.append(symbol)
         rows = con.execute(
             "SELECT DISTINCT ingested_at FROM read_parquet(?, hive_partitioning=true, "
